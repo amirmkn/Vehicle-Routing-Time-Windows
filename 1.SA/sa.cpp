@@ -4,6 +4,7 @@
 #include <vector>
 #include <cmath>
 #include <limits>
+#include <climits>
 #include <cstdlib>
 #include <ctime>
 #include <algorithm>
