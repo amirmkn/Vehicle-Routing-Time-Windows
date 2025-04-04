@@ -1,4 +1,6 @@
 #include <iostream>
+#include <fstream>
+#include <sstream>
 #include <vector>
 #include <cmath>
 #include <limits>
@@ -10,10 +12,11 @@ using namespace std;
 
 struct Customer {
     int id;
+    int x, y;
     int demand;
-    int service_time;
     int earliest;
     int latest;
+    int service_time;
 };
 
 struct Route {
@@ -25,10 +28,10 @@ struct Route {
 
 using Solution = vector<Route>;
 
-const int DEPOT = 0;
-const int Q = 15; // Vehicle capacity
-const int D = 200; // Max route duration
-int M = 3; // Number of vehicles
+int DEPOT = 0;
+int Q = 0; // Vehicle capacity (to be set from file)
+int D = 2000; // Max route duration (can be tweaked)
+int M = 0; // Number of vehicles
 
 vector<Customer> customers;
 vector<vector<int>> dist;
@@ -36,6 +39,10 @@ vector<vector<int>> travel_time;
 
 double rand01() {
     return static_cast<double>(rand()) / RAND_MAX;
+}
+
+int euclidean_distance(const Customer& a, const Customer& b) {
+    return static_cast<int>(round(sqrt(pow(a.x - b.x, 2) + pow(a.y - b.y, 2))));
 }
 
 Solution generate_initial_solution() {
@@ -63,28 +70,25 @@ int calculate_cost(const Solution& sol) {
     int total_distance = 0;
 
     for (const auto& r : sol) {
-        if (r.customers.size() > 2) { // active (non-empty) route
+        if (r.customers.size() > 2) {
             active_routes++;
             for (size_t i = 1; i < r.customers.size(); ++i) {
-                int from = r.customers[i-1];
+                int from = r.customers[i - 1];
                 int to = r.customers[i];
                 total_distance += dist[from][to];
             }
         }
     }
 
-    // Encode cost as: active_routes * large_penalty + distance
-    // So fewer vehicles always preferred
     return active_routes * 100000 + total_distance;
 }
-
 
 bool is_feasible(const Route& route) {
     int demand = 0;
     int time = 0;
 
     for (size_t i = 1; i < route.customers.size(); ++i) {
-        int from = route.customers[i-1];
+        int from = route.customers[i - 1];
         int to = route.customers[i];
         time += travel_time[from][to];
         time = max(time, customers[to].earliest);
@@ -151,7 +155,7 @@ void print_solution(const Solution& sol) {
             cout << "\n";
 
             for (size_t j = 1; j < sol[i].customers.size(); ++j) {
-                total_distance += dist[sol[i].customers[j-1]][sol[i].customers[j]];
+                total_distance += dist[sol[i].customers[j - 1]][sol[i].customers[j]];
             }
         }
     }
@@ -159,30 +163,44 @@ void print_solution(const Solution& sol) {
     cout << "Total distance: " << total_distance << "\n";
 }
 
-
 int main() {
     srand(time(nullptr));
 
-    // Sample input (5 customers + depot)
-    customers = {
-        {0, 0, 0, 0, 999},     // depot
-        {1, 4, 10, 10, 50},
-        {2, 6, 10, 20, 70},
-        {3, 5, 10, 30, 90},
-        {4, 3, 10, 40, 100},
-        {5, 2, 10, 50, 110}
-    };
+    ifstream infile("25-rce-31.txt");
+    if (!infile) {
+        cerr << "Error opening file.\n";
+        return 1;
+    }
 
-    dist = {
-        {0, 10, 20, 30, 40, 50},
-        {10, 0, 15, 25, 35, 45},
-        {20, 15, 0, 14, 24, 34},
-        {30, 25, 14, 0, 10, 20},
-        {40, 35, 24, 10, 0, 10},
-        {50, 45, 34, 20, 10, 0}
-    };
+    string line;
+    while (getline(infile, line)) {
+        if (line.find("VEHICLE") != string::npos) {
+            getline(infile, line); // skip header
+            infile >> M >> Q;
+        }
 
-    travel_time = dist; // same for simplicity
+        if (line.find("CUSTOMER") != string::npos) break;
+    }
+
+    getline(infile, line); // skip headers
+    getline(infile, line);
+
+    customers.clear();
+    while (getline(infile, line)) {
+        if (line.empty()) continue;
+        istringstream iss(line);
+        Customer c;
+        iss >> c.id >> c.x >> c.y >> c.demand >> c.earliest >> c.latest >> c.service_time;
+        customers.push_back(c);
+    }
+
+    int n = customers.size();
+    dist = vector<vector<int>>(n, vector<int>(n));
+    travel_time = vector<vector<int>>(n, vector<int>(n));
+
+    for (int i = 0; i < n; ++i)
+        for (int j = 0; j < n; ++j)
+            dist[i][j] = travel_time[i][j] = euclidean_distance(customers[i], customers[j]);
 
     Solution initial = generate_initial_solution();
     Solution best = simulated_annealing(initial, 1000.0, 0.995, 10000);
