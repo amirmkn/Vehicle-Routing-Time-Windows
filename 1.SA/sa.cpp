@@ -3,11 +3,12 @@
 #include <sstream>
 #include <vector>
 #include <cmath>
-#include <limits>
 #include <climits>
+#include <limits>
 #include <cstdlib>
 #include <ctime>
 #include <algorithm>
+#include <iomanip>
 
 using namespace std;
 
@@ -15,159 +16,222 @@ struct Customer {
     int id;
     int x, y;
     int demand;
-    int earliest;
-    int latest;
-    int service_time;
+    int earliest;    // e_i
+    int latest;      // l_i
+    int service_time; // τ_i
 };
 
 struct Route {
-    vector<int> customers;  // includes depot at start and end
+    vector<int> customers;  // route: depot ... customer ... depot
     int total_demand = 0;
-    int total_distance = 0;
-    int duration = 0;
 };
 
 using Solution = vector<Route>;
 
+// Global parameters (set from file)
 int DEPOT = 0;
-int Q = 0; // Vehicle capacity (to be set from file)
-int D = 2000; // Max route duration (can be tweaked)
-int M = 0; // Number of vehicles
+double Q = 0.0; // Vehicle capacity
+double D = numeric_limits<double>::max(); // maximum route duration (if used)
+int M = 0; // Number of vehicles available
 
 vector<Customer> customers;
-vector<vector<int>> dist;
-vector<vector<int>> travel_time;
+vector<vector<double>> dist;         // distance matrix (double precision)
+vector<vector<double>> travel_time;    // travel time matrix (we assume same as distance)
 
 double rand01() {
     return static_cast<double>(rand()) / RAND_MAX;
 }
 
-int euclidean_distance(const Customer& a, const Customer& b) {
-    return static_cast<int>(round(sqrt(pow(a.x - b.x, 2) + pow(a.y - b.y, 2))));
+// Euclidean distance (double precision)
+double euclidean_distance(const Customer& a, const Customer& b) {
+    double dx = a.x - b.x;
+    double dy = a.y - b.y;
+    return sqrt(dx * dx + dy * dy);
 }
 
-// Greedy initial solution: Try inserting customers into the best available vehicle
+// Greedy initial solution (inserts customers into routes based on best insertion cost)
 Solution generate_initial_solution() {
+    // Create M empty routes, each starting and ending at depot.
     Solution sol;
-    
     for (int i = 0; i < M; ++i) {
-        sol.push_back({{DEPOT, DEPOT}, 0, 0, 0});
+        // Each route starts and ends with the depot.
+        sol.push_back({{DEPOT, DEPOT}, 0});
     }
-
+    
+    // Mark depot as assigned.
     vector<bool> assigned(customers.size(), false);
-    assigned[0] = true; // Depot
-
+    assigned[DEPOT] = true;
+    
+    // For every customer (other than depot), try to insert into a route.
+    // We use a simple best insertion heuristic.
     for (int i = 1; i < customers.size(); ++i) {
-        int best_vehicle = -1;
-        int best_cost = INT_MAX;
-
-        for (int v = 0; v < M; ++v) {
-            if (sol[v].total_demand + customers[i].demand > Q) continue;
-
-            // Try inserting between DEPOT and last customer
-            int last_cust = sol[v].customers[sol[v].customers.size() - 2];
-            int cost = dist[last_cust][i] + dist[i][DEPOT] - dist[last_cust][DEPOT];
-
-            if (cost < best_cost) {
-                best_cost = cost;
-                best_vehicle = v;
+        double best_incr = numeric_limits<double>::max();
+        int best_route = -1;
+        int best_pos = -1;
+        // Try to insert customer i into any route between two consecutive nodes.
+        for (int r = 0; r < M; ++r) {
+            // Only consider this route if adding the customer doesn't violate capacity.
+            if (sol[r].total_demand + customers[i].demand > Q)
+                continue;
+            // Try all insertion positions (between two nodes)
+            for (size_t pos = 1; pos < sol[r].customers.size(); ++pos) {
+                int prev = sol[r].customers[pos - 1];
+                int next = sol[r].customers[pos];
+                double cost_removed = dist[prev][next];
+                double cost_added = dist[prev][i] + dist[i][next];
+                double incr = cost_added - cost_removed;
+                if (incr < best_incr) {
+                    best_incr = incr;
+                    best_route = r;
+                    best_pos = pos;
+                }
             }
         }
-
-        if (best_vehicle != -1) {
-            sol[best_vehicle].customers.insert(sol[best_vehicle].customers.end() - 1, i);
-            sol[best_vehicle].total_demand += customers[i].demand;
+        // If we found a route, insert customer i there.
+        if (best_route != -1) {
+            sol[best_route].customers.insert(sol[best_route].customers.begin() + best_pos, i);
+            sol[best_route].total_demand += customers[i].demand;
+            assigned[i] = true;
         }
     }
-
+    
+    // If any customer remains unassigned, try to create a new route (if vehicles available)
+    // (Here, we assume that the provided instance is feasible with M vehicles.)
+    for (int i = 1; i < customers.size(); ++i) {
+        if (!assigned[i]) {
+            for (int r = 0; r < M; ++r) {
+                // Check if depot->customer->depot is feasible.
+                if (customers[i].demand <= Q) {
+                    sol[r].customers.insert(sol[r].customers.begin() + sol[r].customers.size() - 1, i);
+                    sol[r].total_demand += customers[i].demand;
+                    assigned[i] = true;
+                    break;
+                }
+            }
+        }
+    }
     return sol;
 }
 
-// Cost function: minimize vehicle count first, then minimize distance
-int calculate_cost(const Solution& sol) {
+// Compute the route cost (hierarchical: primary = number of active routes, secondary = total distance).
+// Total distance is rounded to two decimals.
+double calculate_cost(const Solution& sol) {
     int active_routes = 0;
-    int total_distance = 0;
-
+    double total_distance = 0.0;
     for (const auto& r : sol) {
-        if (r.customers.size() > 2) {
+        if (r.customers.size() > 2) { // active route: depot -> ... -> depot
             active_routes++;
             for (size_t i = 1; i < r.customers.size(); ++i) {
-                total_distance += dist[r.customers[i-1]][r.customers[i]];
+                total_distance += dist[r.customers[i - 1]][r.customers[i]];
             }
         }
     }
-
-    return active_routes * 100000 + total_distance;
+    // Hierarchical objective: heavily penalize extra routes.
+    return active_routes * 100000.0 + total_distance;
 }
 
-// Check if the route is feasible: demand and time windows
+// Check feasibility of a route:
+// - The route must start and end at depot.
+// - The cumulative demand <= Q.
+// - Time windows are met. We compute arrival and departure times.
+//   * d₀ = 0 (departure from depot)
+//   * aᵢ = max( dᵢ₋₁ + travel_time(prev, current), eᵢ )
+//   * dᵢ = aᵢ + service_time(current)
+//   * The arrival time back at depot (after the last customer) must be <= depot latest.
 bool is_feasible(const Route& route) {
-    int demand = 0;
-    int time = 0;
-
+    double time = 0.0; // departure from depot is 0
+    int load = 0;
+    
+    // The route must start with depot and end with depot.
+    if (route.customers.front() != DEPOT || route.customers.back() != DEPOT)
+        return false;
+    
+    // Traverse the route sequentially.
     for (size_t i = 1; i < route.customers.size(); ++i) {
         int from = route.customers[i - 1];
         int to = route.customers[i];
-        time += travel_time[from][to];
-        time = max(time, customers[to].earliest);
-        if (time > customers[to].latest) return false;
+        // Arrival time to customer 'to'
+        time = time + travel_time[from][to];
+        // Wait until the earliest time if arrived early.
+        time = max(time, static_cast<double>(customers[to].earliest));
+        // If arrival is after the latest allowable time, infeasible.
+        if (time > customers[to].latest)
+            return false;
+        // Add service time (departure time)
         time += customers[to].service_time;
-        demand += customers[to].demand;
+        load += customers[to].demand;
+        if (load > Q)
+            return false;
     }
-
-    return demand <= Q && time <= D;
+    // Ensure that the final arrival at the depot is within the depot's time window.
+    if (time > customers[DEPOT].latest)
+        return false;
+    
+    return true;
 }
 
-// Move a random customer to another route
+// Generate a neighbor solution by reassigning a customer from one route to another.
+// Here we remove a random customer (not depot) from one route and insert it in another route at a random position.
 Solution generate_neighbor(const Solution& sol) {
     Solution neighbor = sol;
     int v1 = rand() % M;
     int v2 = rand() % M;
-
-    if (neighbor[v1].customers.size() <= 2 || neighbor[v2].customers.size() <= 2) return neighbor;
-
-    int i = rand() % (neighbor[v1].customers.size() - 2) + 1;
-    int customer = neighbor[v1].customers[i];
-
-    neighbor[v1].customers.erase(neighbor[v1].customers.begin() + i);
-
+    // Ensure route v1 has at least one customer (other than depot start/end)
+    if (neighbor[v1].customers.size() <= 2)
+        return neighbor;
+    // Select a random customer index in route v1 (excluding first and last, which are depot).
+    int pos = rand() % (neighbor[v1].customers.size() - 2) + 1;
+    int cust = neighbor[v1].customers[pos];
+    // Remove the customer from route v1.
+    neighbor[v1].customers.erase(neighbor[v1].customers.begin() + pos);
+    neighbor[v1].total_demand -= customers[cust].demand;
+    
+    // Try to insert into route v2 at a random valid position (between depots).
     int insert_pos = rand() % (neighbor[v2].customers.size() - 1) + 1;
-    neighbor[v2].customers.insert(neighbor[v2].customers.begin() + insert_pos, customer);
-
+    neighbor[v2].customers.insert(neighbor[v2].customers.begin() + insert_pos, cust);
+    neighbor[v2].total_demand += customers[cust].demand;
+    
+    // Check feasibility; if not feasible, return original solution.
     if (!is_feasible(neighbor[v1]) || !is_feasible(neighbor[v2])) {
         return sol;
     }
-
+    
     return neighbor;
 }
 
-// Simulated Annealing Optimization
+// Simulated Annealing optimization
 Solution simulated_annealing(Solution initial, double T, double alpha, int max_iter) {
     Solution current = initial;
     Solution best = current;
-
+    double current_cost = calculate_cost(current);
+    double best_cost = current_cost;
+    
     for (int iter = 0; iter < max_iter; ++iter) {
         Solution neighbor = generate_neighbor(current);
-        int delta = calculate_cost(neighbor) - calculate_cost(current);
-
+        double neighbor_cost = calculate_cost(neighbor);
+        double delta = neighbor_cost - current_cost;
+        
         if (delta < 0 || rand01() < exp(-delta / T)) {
             current = neighbor;
-            if (calculate_cost(current) < calculate_cost(best)) {
+            current_cost = neighbor_cost;
+            if (current_cost < best_cost) {
                 best = current;
+                best_cost = current_cost;
             }
         }
-
+        
         T *= alpha;
-        if (T < 1e-3) break;
+        if (T < 1e-3)
+            break;
     }
-
+    
     return best;
 }
 
 void print_solution(const Solution& sol) {
     int active_routes = 0;
-    int total_distance = 0;
-
+    double total_distance = 0.0;
+    
     for (size_t i = 0; i < sol.size(); ++i) {
         if (sol[i].customers.size() > 2) {
             active_routes++;
@@ -176,62 +240,71 @@ void print_solution(const Solution& sol) {
                 cout << c << " ";
             }
             cout << "\n";
-
             for (size_t j = 1; j < sol[i].customers.size(); ++j) {
-                total_distance += dist[sol[i].customers[j - 1]][sol[i].customers[j]];
+                total_distance += dist[sol[i].customers[j-1]][sol[i].customers[j]];
             }
         }
     }
+    // Round total_distance to 2 decimals.
+    total_distance = round(total_distance * 100) / 100.0;
     cout << "Number of vehicles used: " << active_routes << "\n";
-    cout << "Total distance: " << total_distance << "\n";
+    cout << "Total distance: " << fixed << setprecision(2) << total_distance << "\n";
 }
 
-// Read input file
+// Read instance from file
+// Expects a file formatted like your sample instance.
 void read_data(const string& filename) {
     ifstream infile(filename);
     if (!infile) {
-        cerr << "Error opening file.\n";
+        cerr << "Error opening file " << filename << "\n";
         exit(1);
     }
-
+    
     string line;
+    // Read vehicle information
     while (getline(infile, line)) {
         if (line.find("VEHICLE") != string::npos) {
-            getline(infile, line);
+            getline(infile, line); // skip header
             infile >> M >> Q;
         }
-        if (line.find("CUSTOMER") != string::npos) break;
+        if (line.find("CUSTOMER") != string::npos)
+            break;
     }
-
+    // Skip header lines for customer data
     getline(infile, line);
     getline(infile, line);
-
+    
     customers.clear();
     while (getline(infile, line)) {
-        if (line.empty()) continue;
+        if (line.empty())
+            continue;
         istringstream iss(line);
         Customer c;
         iss >> c.id >> c.x >> c.y >> c.demand >> c.earliest >> c.latest >> c.service_time;
         customers.push_back(c);
     }
-
+    
     int n = customers.size();
-    dist = vector<vector<int>>(n, vector<int>(n));
-    travel_time = vector<vector<int>>(n, vector<int>(n));
-
+    dist = vector<vector<double>>(n, vector<double>(n, 0.0));
+    travel_time = vector<vector<double>>(n, vector<double>(n, 0.0));
+    
     for (int i = 0; i < n; ++i)
-        for (int j = 0; j < n; ++j)
-            dist[i][j] = travel_time[i][j] = euclidean_distance(customers[i], customers[j]);
+        for (int j = 0; j < n; ++j) {
+            dist[i][j] = euclidean_distance(customers[i], customers[j]);
+            travel_time[i][j] = dist[i][j]; // Assume travel time equals distance.
+        }
 }
 
 int main() {
     srand(time(nullptr));
-
+    
+    // Read instance file (adjust filename as needed)
     read_data("25-rce-31.txt");
-
+    
+    // Generate initial solution and optimize using Simulated Annealing.
     Solution initial = generate_initial_solution();
     Solution best = simulated_annealing(initial, 1000.0, 0.995, 5000);
-
+    
     print_solution(best);
     return 0;
 }
