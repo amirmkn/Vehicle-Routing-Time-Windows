@@ -45,26 +45,44 @@ int euclidean_distance(const Customer& a, const Customer& b) {
     return static_cast<int>(round(sqrt(pow(a.x - b.x, 2) + pow(a.y - b.y, 2))));
 }
 
+// Greedy initial solution: Try inserting customers into the best available vehicle
 Solution generate_initial_solution() {
-    Solution sol(M);
-    vector<bool> visited(customers.size(), false);
-    visited[0] = true;
+    Solution sol;
+    
+    for (int i = 0; i < M; ++i) {
+        sol.push_back({{DEPOT, DEPOT}, 0, 0, 0});
+    }
 
-    int vehicle = 0;
+    vector<bool> assigned(customers.size(), false);
+    assigned[0] = true; // Depot
+
     for (int i = 1; i < customers.size(); ++i) {
-        if (vehicle >= M) break;
-        if (sol[vehicle].total_demand + customers[i].demand <= Q) {
-            sol[vehicle].customers.push_back(DEPOT);
-            sol[vehicle].customers.push_back(i);
-            sol[vehicle].customers.push_back(DEPOT);
-            sol[vehicle].total_demand += customers[i].demand;
-            visited[i] = true;
-            vehicle++;
+        int best_vehicle = -1;
+        int best_cost = INT_MAX;
+
+        for (int v = 0; v < M; ++v) {
+            if (sol[v].total_demand + customers[i].demand > Q) continue;
+
+            // Try inserting between DEPOT and last customer
+            int last_cust = sol[v].customers[sol[v].customers.size() - 2];
+            int cost = dist[last_cust][i] + dist[i][DEPOT] - dist[last_cust][DEPOT];
+
+            if (cost < best_cost) {
+                best_cost = cost;
+                best_vehicle = v;
+            }
+        }
+
+        if (best_vehicle != -1) {
+            sol[best_vehicle].customers.insert(sol[best_vehicle].customers.end() - 1, i);
+            sol[best_vehicle].total_demand += customers[i].demand;
         }
     }
+
     return sol;
 }
 
+// Cost function: minimize vehicle count first, then minimize distance
 int calculate_cost(const Solution& sol) {
     int active_routes = 0;
     int total_distance = 0;
@@ -73,9 +91,7 @@ int calculate_cost(const Solution& sol) {
         if (r.customers.size() > 2) {
             active_routes++;
             for (size_t i = 1; i < r.customers.size(); ++i) {
-                int from = r.customers[i - 1];
-                int to = r.customers[i];
-                total_distance += dist[from][to];
+                total_distance += dist[r.customers[i-1]][r.customers[i]];
             }
         }
     }
@@ -83,6 +99,7 @@ int calculate_cost(const Solution& sol) {
     return active_routes * 100000 + total_distance;
 }
 
+// Check if the route is feasible: demand and time windows
 bool is_feasible(const Route& route) {
     int demand = 0;
     int time = 0;
@@ -100,6 +117,7 @@ bool is_feasible(const Route& route) {
     return demand <= Q && time <= D;
 }
 
+// Move a random customer to another route
 Solution generate_neighbor(const Solution& sol) {
     Solution neighbor = sol;
     int v1 = rand() % M;
@@ -108,9 +126,12 @@ Solution generate_neighbor(const Solution& sol) {
     if (neighbor[v1].customers.size() <= 2 || neighbor[v2].customers.size() <= 2) return neighbor;
 
     int i = rand() % (neighbor[v1].customers.size() - 2) + 1;
-    int j = rand() % (neighbor[v2].customers.size() - 2) + 1;
+    int customer = neighbor[v1].customers[i];
 
-    swap(neighbor[v1].customers[i], neighbor[v2].customers[j]);
+    neighbor[v1].customers.erase(neighbor[v1].customers.begin() + i);
+
+    int insert_pos = rand() % (neighbor[v2].customers.size() - 1) + 1;
+    neighbor[v2].customers.insert(neighbor[v2].customers.begin() + insert_pos, customer);
 
     if (!is_feasible(neighbor[v1]) || !is_feasible(neighbor[v2])) {
         return sol;
@@ -119,6 +140,7 @@ Solution generate_neighbor(const Solution& sol) {
     return neighbor;
 }
 
+// Simulated Annealing Optimization
 Solution simulated_annealing(Solution initial, double T, double alpha, int max_iter) {
     Solution current = initial;
     Solution best = current;
@@ -163,26 +185,24 @@ void print_solution(const Solution& sol) {
     cout << "Total distance: " << total_distance << "\n";
 }
 
-int main() {
-    srand(time(nullptr));
-
-    ifstream infile("25-rce-31.txt");
+// Read input file
+void read_data(const string& filename) {
+    ifstream infile(filename);
     if (!infile) {
         cerr << "Error opening file.\n";
-        return 1;
+        exit(1);
     }
 
     string line;
     while (getline(infile, line)) {
         if (line.find("VEHICLE") != string::npos) {
-            getline(infile, line); // skip header
+            getline(infile, line);
             infile >> M >> Q;
         }
-
         if (line.find("CUSTOMER") != string::npos) break;
     }
 
-    getline(infile, line); // skip headers
+    getline(infile, line);
     getline(infile, line);
 
     customers.clear();
@@ -201,9 +221,15 @@ int main() {
     for (int i = 0; i < n; ++i)
         for (int j = 0; j < n; ++j)
             dist[i][j] = travel_time[i][j] = euclidean_distance(customers[i], customers[j]);
+}
+
+int main() {
+    srand(time(nullptr));
+
+    read_data("25-rce-31.txt");
 
     Solution initial = generate_initial_solution();
-    Solution best = simulated_annealing(initial, 1000.0, 0.995, 10000);
+    Solution best = simulated_annealing(initial, 1000.0, 0.995, 5000);
 
     print_solution(best);
     return 0;
