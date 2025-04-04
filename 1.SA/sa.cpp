@@ -299,7 +299,7 @@ int main() {
     srand(time(nullptr));
     
     // Read instance file (adjust filename as needed)
-    read_data("25-rce-31.txt");
+    read_data("200-rce-42.txt");
     
     // Generate initial solution and optimize using Simulated Annealing.
     Solution initial = generate_initial_solution();
