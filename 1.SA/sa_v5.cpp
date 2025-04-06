@@ -11,10 +11,8 @@
 #include <iomanip>
 #include <chrono>
 
-
 using namespace std;
 using namespace std::chrono;
-
 
 // Global parameters (set from file)
 int DEPOT = 0;
@@ -57,9 +55,8 @@ bool can_insert_customer(const Route& route, int customer_id, int insert_pos) {
 
 bool is_solution_feasible(const Solution& sol) {
     for (const auto& route : sol) {
-        if (route.customers.size() > 2 && !is_feasible(route)) {
+        if (route.customers.size() > 2 && !is_feasible(route))
             return false;
-        }
     }
     return true;
 }
@@ -147,6 +144,7 @@ Solution generate_initial_solution() {
     vector<bool> assigned(customers.size(), false);
     assigned[DEPOT] = true;
 
+    // Insertion heuristic
     for (int i = 1; i < customers.size(); ++i) {
         double best_incr = numeric_limits<double>::max();
         int best_route = -1;
@@ -174,6 +172,7 @@ Solution generate_initial_solution() {
         }
     }
 
+    // Insert any unassigned customers at the end
     for (int i = 1; i < customers.size(); ++i) {
         if (!assigned[i]) {
             for (int r = 0; r < M; ++r) {
@@ -216,29 +215,62 @@ bool time_or_eval_limit_reached() {
     return false;
 }
 
+// Enhanced neighbor generation: randomly chooses either a removal–insertion or a swap move.
 Solution generate_neighbor(const Solution& sol) {
     Solution neighbor = sol;
-    int v1 = rand() % M;
-    int v2 = rand() % M;
+    int moveType = rand() % 2; // 0: removal-insertion, 1: swap
 
-    if (neighbor[v1].customers.size() <= 2)
-        return neighbor;
+    if (moveType == 0) {
+        // Removal–insertion move
+        int v1 = rand() % M;
+        int v2 = rand() % M;
 
-    int pos = rand() % (neighbor[v1].customers.size() - 2) + 1;
-    int cust = neighbor[v1].customers[pos];
+        if (neighbor[v1].customers.size() <= 2)
+            return neighbor;
 
-    neighbor[v1].customers.erase(neighbor[v1].customers.begin() + pos);
-    neighbor[v1].total_demand -= customers[cust].demand;
+        int pos = rand() % (neighbor[v1].customers.size() - 2) + 1;
+        int cust = neighbor[v1].customers[pos];
 
-    int insert_pos = rand() % (neighbor[v2].customers.size() - 1) + 1;
+        neighbor[v1].customers.erase(neighbor[v1].customers.begin() + pos);
+        neighbor[v1].total_demand -= customers[cust].demand;
 
-    if (neighbor[v2].total_demand + customers[cust].demand <= Q &&
-        can_insert_customer(neighbor[v2], cust, insert_pos)) {
-        neighbor[v2].customers.insert(neighbor[v2].customers.begin() + insert_pos, cust);
-        neighbor[v2].total_demand += customers[cust].demand;
-        return neighbor;
+        int insert_pos = rand() % (neighbor[v2].customers.size() - 1) + 1;
+
+        if (neighbor[v2].total_demand + customers[cust].demand <= Q &&
+            can_insert_customer(neighbor[v2], cust, insert_pos)) {
+            neighbor[v2].customers.insert(neighbor[v2].customers.begin() + insert_pos, cust);
+            neighbor[v2].total_demand += customers[cust].demand;
+            return neighbor;
+        }
+    } else {
+        // Swap move between two routes
+        int r1 = rand() % M;
+        int r2 = rand() % M;
+        if (r1 == r2 ||
+            neighbor[r1].customers.size() <= 2 ||
+            neighbor[r2].customers.size() <= 2)
+            return neighbor;
+
+        int pos1 = rand() % (neighbor[r1].customers.size() - 2) + 1;
+        int pos2 = rand() % (neighbor[r2].customers.size() - 2) + 1;
+        int cust1 = neighbor[r1].customers[pos1];
+        int cust2 = neighbor[r2].customers[pos2];
+
+        // Check capacity feasibility for swap
+        if (neighbor[r1].total_demand - customers[cust1].demand + customers[cust2].demand <= Q &&
+            neighbor[r2].total_demand - customers[cust2].demand + customers[cust1].demand <= Q) {
+
+            // Tentatively swap customers
+            swap(neighbor[r1].customers[pos1], neighbor[r2].customers[pos2]);
+            if (is_feasible(neighbor[r1]) && is_feasible(neighbor[r2])) {
+                neighbor[r1].total_demand = neighbor[r1].total_demand - customers[cust1].demand + customers[cust2].demand;
+                neighbor[r2].total_demand = neighbor[r2].total_demand - customers[cust2].demand + customers[cust1].demand;
+                return neighbor;
+            }
+            // Otherwise, swap back if infeasible
+            swap(neighbor[r1].customers[pos1], neighbor[r2].customers[pos2]);
+        }
     }
-
     return sol;
 }
 
@@ -254,65 +286,62 @@ Solution simulated_annealing(Solution initial, double T, double alpha, int max_i
 
     std::ofstream logFile("log.txt");
 
-
-    for (int iter = 0;; ++iter) {
-        auto now = std::chrono::steady_clock::now();
-        std::chrono::duration<double> elapsed = now - start_time;
-        if (elapsed.count() > max_exec_seconds || evaluation_count >= max_evaluations)
-            break;
-            
+    for (int iter = 0; !time_or_eval_limit_reached(); ++iter) {
         evaluation_count++;
-
 
         Solution neighbor = generate_neighbor(current);
         double neighbor_cost = calculate_cost(neighbor);
         double delta = neighbor_cost - current_cost;
 
+        // Acceptance criterion
         if (delta < 0 || rand01() < exp(-delta / T)) {
             current = neighbor;
             current_cost = neighbor_cost;
+            // Reset stagnation counter if an improvement in the best solution is found
             if (current_cost < best_cost) {
                 best = current;
                 best_cost = current_cost;
                 stagnation_counter = 0;
-            }else{
+            } else {
                 stagnation_counter++;
             }
-        }else{
-        stagnation_counter++;
+        } else {
+            stagnation_counter++;
         }
-        
-        // Logging
+
+        // Logging iteration info
         logFile << "Iter: " << iter
                 << ", Temp: " << T
                 << ", Best: " << best_cost
                 << ", Eval: " << evaluation_count
                 << std::endl;
 
-        T *= alpha;
-        // === Reheat condition ===
+        // Update temperature
+        T *= alpha ;
+
+        // Reheat if stagnation is detected
         if (stagnation_counter >= max_stagnation) {
-            T = init_temp * 0.5; // Reheat to 50% of original temp
+            T = init_temp*2; // Reset to initial temperature
             stagnation_counter = 0;
             reheats++;
             logFile << ">>> Reheating! Temp reset to: " << T << std::endl;
-
-            // Optional: restart from a random solution
-            // current = generate_random_solution();
         }
-        if (T < 1e-3)
-        T = init_temp * 0.1; // Reheat mildly if temp too low
-        logFile << ">>> Reheating due to low temp." << std::endl;
+        // Check for low temperature and reheat if necessary
+        if (T < 1e-3) {
+            T = init_temp;
+            logFile << ">>> Reheating due to low temp. Temp reset to: " << T << std::endl;
+        }
     }
     logFile << "Total reheats: " << reheats << std::endl;
     logFile.close();
-    auto now = std::chrono::steady_clock::now();
+
+    auto now = steady_clock::now();
     std::chrono::duration<double> elapsed = now - start_time;
-    
+
     cout << "🔁 Evaluations done: " << evaluation_count << endl;
     cout << "⏱️  Time elapsed: " << elapsed.count() << " seconds" << endl;
     cout << "🔥 Final temperature: " << T << endl;
-    
+
     return best;
 }
 
@@ -393,8 +422,13 @@ int main(int argc, char* argv[]) {
 
     start_time = steady_clock::now();
 
+    // Adjusted parameters: initial temperature and a slower cooling schedule.
+    double initial_temp = 1000.0;
+    double cooling_factor = 0.997;
+    int max_iter = 10000000;
+
     Solution initial = generate_initial_solution();
-    Solution best = simulated_annealing(initial, 1000.0, 0.995, 10000000);
+    Solution best = simulated_annealing(initial, initial_temp, cooling_factor, max_iter);
 
     print_solution(best);
 
