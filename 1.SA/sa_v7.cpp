@@ -18,10 +18,9 @@ using namespace std;
 using namespace std::chrono;
 
 // Global parameters (set from file)
-int DEPOT = 0;
-double Q = 0.0;
-double D = numeric_limits<double>::max();
-int M = 0;
+int DEPOT = 0; //Depot ID
+double Q = 0.0; //Maximum capacity of each vehicle
+int M = 0; // Number of vehicles
 
 
 using Solution = vector<Route>;
