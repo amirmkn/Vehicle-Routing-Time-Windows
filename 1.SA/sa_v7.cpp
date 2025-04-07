@@ -25,16 +25,36 @@ int M = 0; // Number of vehicles
 
 using Solution = vector<Route>;
 
-vector<Customer> customers;
-vector<vector<double>> dist;
-vector<vector<double>> travel_time;
+vector<Customer> customers; // List of customers
+vector<vector<double>> dist; // Distance matrix
+vector<vector<double>> travel_time;// Travel time matrix
 
 int evaluation_count = 0;
 int max_evaluations = 0;
 double max_exec_seconds = 0.0;
-time_point<steady_clock> start_time;
+time_point<steady_clock> start_time;// Start time for execution
 
-bool is_feasible(const Route& route);
+bool is_feasible(const Route& route) {
+    double time = 0.0;
+    int load = 0;
+    if (route.customers.front() != DEPOT || route.customers.back() != DEPOT)
+        return false;
+    for (size_t i = 1; i < route.customers.size(); ++i) {
+        int from = route.customers[i - 1];
+        int to = route.customers[i];
+        time += travel_time[from][to];
+        time = max(time, static_cast<double>(customers[to].earliest));
+        if (time > customers[to].latest)
+            return false;
+        time += customers[to].service_time;
+        load += customers[to].demand;
+        if (load > Q)
+            return false;
+    }
+    if (time > customers[DEPOT].latest)
+        return false;
+    return true;
+}
 
 bool can_insert_customer(const Route& route, int customer_id, int insert_pos) {
     Route temp = route;
@@ -61,27 +81,6 @@ double euclidean_distance(const Customer& a, const Customer& b) {
     return sqrt(dx * dx + dy * dy);
 }
 
-bool is_feasible(const Route& route) {
-    double time = 0.0;
-    int load = 0;
-    if (route.customers.front() != DEPOT || route.customers.back() != DEPOT)
-        return false;
-    for (size_t i = 1; i < route.customers.size(); ++i) {
-        int from = route.customers[i - 1];
-        int to = route.customers[i];
-        time += travel_time[from][to];
-        time = max(time, static_cast<double>(customers[to].earliest));
-        if (time > customers[to].latest)
-            return false;
-        time += customers[to].service_time;
-        load += customers[to].demand;
-        if (load > Q)
-            return false;
-    }
-    if (time > customers[DEPOT].latest)
-        return false;
-    return true;
-}
 
 // Function to generate the initial solution using a greedy approach
 Solution generate_greedy_solution(){
