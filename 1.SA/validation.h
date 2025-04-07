@@ -6,8 +6,19 @@
 using namespace std;
 
 // Forward declarations; these types must match your definitions in the main code.
-struct Customer;
-struct Route;
+struct Customer {
+    int id;
+    int x, y;
+    int demand;
+    int earliest;
+    int latest;
+    int service_time;
+};
+
+struct Route {
+    vector<int> customers;
+    int total_demand = 0;
+};
 using Solution = vector<Route>;
 
 // Declaration of the validation function.
