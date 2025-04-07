@@ -352,11 +352,14 @@ void write_solution_to_file(const Solution& sol, const string& instance_name) {
     int active_routes = 0;
     double total_distance = 0.0;
     outFile << fixed << setprecision(2);
+    
+    int route_number = 1;  // Start numbering from 1
 
     for (size_t i = 0; i < sol.size(); ++i) {
         if (sol[i].customers.size() > 2) {
             active_routes++;
-            outFile << "Route " << i + 1 << ": ";
+            outFile << "Route " << route_number << ": ";
+            route_number++;
             // Skip the first and last element (depot = 0)
             for (size_t j = 1; j + 1 < sol[i].customers.size(); ++j) {
                 outFile << sol[i].customers[j];
@@ -372,8 +375,8 @@ void write_solution_to_file(const Solution& sol, const string& instance_name) {
     }
 
     total_distance = round(total_distance * 100) / 100.0;
-    outFile << "Number of vehicles used: " << active_routes << "\n";
-    outFile << "Total distance: " << total_distance << "\n\n";
+    outFile << "Vehicles: " << active_routes << "\n\n";
+    outFile << "Distance: " << total_distance << "\n\n";
 
     cout << "Final result saved to " << out_filename << endl;
 }
