@@ -393,28 +393,107 @@ Solution simulated_annealing(Solution initial, double T, double alpha, int max_i
     return best;
 }
 
-void print_solution(const Solution& sol) {
+// void print_solution(const Solution& sol) {
+//     int active_routes = 0;
+//     double total_distance = 0.0;
+
+//     for (size_t i = 0; i < sol.size(); ++i) {
+//         if (sol[i].customers.size() > 2) {
+//             active_routes++;
+//             cout << "Route " << i + 1 << ": ";
+//             for (int c : sol[i].customers) {
+//                 cout << c << " ";
+//             }
+//             cout << "\n";
+//             for (size_t j = 1; j < sol[i].customers.size(); ++j) {
+//                 total_distance += dist[sol[i].customers[j - 1]][sol[i].customers[j]];
+//             }
+//         }
+//     }
+//     total_distance = round(total_distance * 100) / 100.0;
+//     cout << "Number of vehicles used: " << active_routes << "\n";
+//     cout << "Total distance: " << fixed << setprecision(2) << total_distance << "\n";
+// }
+
+// This function writes the final solution and checks to an output file.
+void write_solution_to_file(const Solution& sol, const string& instance_name) {
+    string out_filename = instance_name + "_output.txt";
+    ofstream outFile(out_filename);
+
+    if (!outFile.is_open()) {
+        cerr << "Error opening output file: " << out_filename << endl;
+        return;
+    }
+
     int active_routes = 0;
     double total_distance = 0.0;
+    outFile << fixed << setprecision(2);
 
     for (size_t i = 0; i < sol.size(); ++i) {
         if (sol[i].customers.size() > 2) {
             active_routes++;
-            cout << "Route " << i + 1 << ": ";
+            outFile << "Route " << i + 1 << ": ";
             for (int c : sol[i].customers) {
-                cout << c << " ";
+                outFile << c << " ";
             }
-            cout << "\n";
+            outFile << "\n";
             for (size_t j = 1; j < sol[i].customers.size(); ++j) {
                 total_distance += dist[sol[i].customers[j - 1]][sol[i].customers[j]];
             }
+            outFile << "\n";
         }
     }
     total_distance = round(total_distance * 100) / 100.0;
-    cout << "Number of vehicles used: " << active_routes << "\n";
-    cout << "Total distance: " << fixed << setprecision(2) << total_distance << "\n";
+    outFile << "Number of vehicles used: " << active_routes << "\n";
+    outFile << "Total distance: " << total_distance << "\n\n";
+
+    // Check feasibility and other conditions
+    bool feasible = is_solution_feasible(sol);
+    bool all_served = all_customers_served_once(sol, customers.size());
+    bool demand_ok = check_demands(sol);
+    bool time_window_ok = check_time_windows(sol);
+
+    if (feasible)
+        outFile << "✅ Feasibility check passed.\n";
+    else
+        outFile << "❌ Route feasibility check failed.\n";
+
+    if (all_served)
+        outFile << "✅ All customers visited exactly once.\n";
+    else
+        outFile << "❌ Some customers were missed or visited more than once.\n";
+
+    if (demand_ok)
+        outFile << "✅ Route demands within vehicle capacity.\n";
+    else
+        outFile << "❌ One or more routes exceed vehicle capacity!\n";
+
+    if (time_window_ok)
+        outFile << "✅ Time window constraints satisfied.\n";
+    else
+        outFile << "❌ Time window violation detected!\n";
+
+    if (feasible && all_served && demand_ok && time_window_ok)
+        outFile << "🎉 Final solution is VALID.\n";
+    else
+        outFile << "🚨 Final solution is INVALID.\n";
+
+    outFile.close();
+    cout << "Output written to: " << out_filename << endl;
 }
 
+// Utility function to extract instance name from a file path.
+// It strips directory and extension. For example, "data/C101.txt" becomes "C101".
+string extract_instance_name(const string& file_path) {
+    // Find the last '/' or '\\'
+    size_t pos = file_path.find_last_of("/\\");
+    string filename = (pos == string::npos) ? file_path : file_path.substr(pos + 1);
+    // Remove extension if present
+    pos = filename.find_last_of(".");
+    if (pos != string::npos)
+        filename = filename.substr(0, pos);
+    return filename;
+}
 void read_data(const string& filename) {
     ifstream infile(filename);
     if (!infile) {
@@ -490,37 +569,40 @@ int main(int argc, char* argv[]) {
     // Call simulated annealing with the selected initial solution
     Solution best = simulated_annealing(initial, initial_temp, cooling_factor, max_iter);
 
-    print_solution(best);
+    // Extract instance name from file path
+    string instance_name = extract_instance_name(file_path);
 
-    bool feasible = is_solution_feasible(best);
-    bool all_served = all_customers_served_once(best, customers.size());
-    bool demand_ok = check_demands(best);
-    bool time_window_ok = check_time_windows(best);
+    // Write solution and checks to output file
+    write_solution_to_file(best, instance_name);
+    // bool feasible = is_solution_feasible(best);
+    // bool all_served = all_customers_served_once(best, customers.size());
+    // bool demand_ok = check_demands(best);
+    // bool time_window_ok = check_time_windows(best);
 
-    if (feasible)
-        cout << "✅ Feasibility check passed.\n";
-    else
-        cout << "❌ Route feasibility check failed.\n";
+    // if (feasible)
+    //     cout << "✅ Feasibility check passed.\n";
+    // else
+    //     cout << "❌ Route feasibility check failed.\n";
 
-    if (all_served)
-        cout << "✅ All customers visited exactly once.\n";
-    else
-        cout << "❌ Some customers were missed or visited more than once.\n";
+    // if (all_served)
+    //     cout << "✅ All customers visited exactly once.\n";
+    // else
+    //     cout << "❌ Some customers were missed or visited more than once.\n";
 
-    if (demand_ok)
-        cout << "✅ Route demands within vehicle capacity.\n";
-    else
-        cout << "❌ One or more routes exceed vehicle capacity!\n";
+    // if (demand_ok)
+    //     cout << "✅ Route demands within vehicle capacity.\n";
+    // else
+    //     cout << "❌ One or more routes exceed vehicle capacity!\n";
 
-    if (time_window_ok)
-        cout << "✅ Time window constraints satisfied.\n";
-    else
-        cout << "❌ Time window violation detected!\n";
+    // if (time_window_ok)
+    //     cout << "✅ Time window constraints satisfied.\n";
+    // else
+    //     cout << "❌ Time window violation detected!\n";
 
-    if (feasible && all_served && demand_ok && time_window_ok)
-        cout << "🎉 Final solution is VALID.\n";
-    else
-        cout << "🚨 Final solution is INVALID.\n";
+    // if (feasible && all_served && demand_ok && time_window_ok)
+    //     cout << "🎉 Final solution is VALID.\n";
+    // else
+    //     cout << "🚨 Final solution is INVALID.\n";
 
     return 0;
 }
