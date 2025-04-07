@@ -10,6 +10,8 @@
 #include <algorithm>
 #include <iomanip>
 #include <chrono>
+#include <random>
+#include <numeric>
 
 using namespace std;
 using namespace std::chrono;
@@ -135,7 +137,8 @@ bool is_feasible(const Route& route) {
     return true;
 }
 
-Solution generate_initial_solution() {
+// Function to generate the initial solution using a greedy approach
+Solution generate_greedy_solution(){
     Solution sol;
     for (int i = 0; i < M; ++i) {
         sol.push_back({{DEPOT, DEPOT}, 0});
@@ -187,6 +190,51 @@ Solution generate_initial_solution() {
             }
         }
     }
+    return sol;
+}
+
+// Function to generate the initial solution using a random approach
+Solution generate_random_solution() {
+    Solution sol;
+    for (int i = 0; i < M; ++i) {
+        sol.push_back({{DEPOT, DEPOT}, 0});
+    }
+
+    vector<bool> assigned(customers.size(), false);
+    assigned[DEPOT] = true;
+
+    // Create a shuffled list of customer IDs (excluding depot)
+    vector<int> cust_ids;
+    for (int i = 1; i < customers.size(); ++i) {
+        cust_ids.push_back(i);
+    }
+
+    std::random_device rd;
+    std::mt19937 g(rd());
+    std::shuffle(cust_ids.begin(), cust_ids.end(), g);
+
+    for (int cust : cust_ids) {
+        // Try to assign the customer to a feasible route
+        vector<int> route_order(M);
+        std::iota(route_order.begin(), route_order.end(), 0);  // Fill with 0, 1, ..., M-1
+        std::shuffle(route_order.begin(), route_order.end(), g);
+
+        bool inserted = false;
+        for (int r : route_order) {
+            for (size_t pos = 1; pos < sol[r].customers.size(); ++pos) {
+                if (sol[r].total_demand + customers[cust].demand <= Q &&
+                    can_insert_customer(sol[r], cust, pos)) {
+                    sol[r].customers.insert(sol[r].customers.begin() + pos, cust);
+                    sol[r].total_demand += customers[cust].demand;
+                    inserted = true;
+                    break;
+                }
+            }
+            if (inserted) break;
+        }
+        assigned[cust] = inserted;
+    }
+
     return sol;
 }
 
@@ -271,81 +319,6 @@ Solution generate_neighbor(const Solution& sol) {
             swap(neighbor[r1].customers[pos1], neighbor[r2].customers[pos2]);
         }
     }
-    return sol;
-}
-// Function to generate the initial solution using a greedy approach
-Solution generate_greedy_solution() {
-    Solution sol;
-    for (int i = 0; i < M; ++i) {
-        sol.push_back({{DEPOT, DEPOT}, 0});
-    }
-
-    vector<bool> assigned(customers.size(), false);
-    assigned[DEPOT] = true;
-
-    for (int i = 1; i < customers.size(); ++i) {
-        double best_incr = numeric_limits<double>::max();
-        int best_route = -1;
-        int best_pos = -1;
-        for (int r = 0; r < M; ++r) {
-            if (sol[r].total_demand + customers[i].demand > Q)
-                continue;
-            for (size_t pos = 1; pos < sol[r].customers.size(); ++pos) {
-                int prev = sol[r].customers[pos - 1];
-                int next = sol[r].customers[pos];
-                double cost_removed = dist[prev][next];
-                double cost_added = dist[prev][i] + dist[i][next];
-                double incr = cost_added - cost_removed;
-                if (incr < best_incr && can_insert_customer(sol[r], i, pos)) {
-                    best_incr = incr;
-                    best_route = r;
-                    best_pos = pos;
-                }
-            }
-        }
-        if (best_route != -1) {
-            sol[best_route].customers.insert(sol[best_route].customers.begin() + best_pos, i);
-            sol[best_route].total_demand += customers[i].demand;
-            assigned[i] = true;
-        }
-    }
-
-    for (int i = 1; i < customers.size(); ++i) {
-        if (!assigned[i]) {
-            for (int r = 0; r < M; ++r) {
-                int pos = sol[r].customers.size() - 1;
-                if (customers[i].demand <= Q &&
-                    can_insert_customer(sol[r], i, pos)) {
-                    sol[r].customers.insert(sol[r].customers.begin() + pos, i);
-                    sol[r].total_demand += customers[i].demand;
-                    assigned[i] = true;
-                    break;
-                }
-            }
-        }
-    }
-    return sol;
-}
-
-// Function to generate the initial solution using a random approach
-Solution generate_random_solution() {
-    Solution sol;
-    for (int i = 0; i < M; ++i) {
-        sol.push_back({{DEPOT, DEPOT}, 0});
-    }
-
-    vector<bool> assigned(customers.size(), false);
-    assigned[DEPOT] = true;
-
-    for (int i = 1; i < customers.size(); ++i) {
-        // Select a random route
-        int route_idx = rand() % M;
-        // Add customer to the selected route
-        sol[route_idx].customers.push_back(i);
-        sol[route_idx].total_demand += customers[i].demand;
-        assigned[i] = true;
-    }
-
     return sol;
 }
 
