@@ -23,19 +23,6 @@ double Q = 0.0;
 double D = numeric_limits<double>::max();
 int M = 0;
 
-// struct Customer {
-//     int id;
-//     int x, y;
-//     int demand;
-//     int earliest;
-//     int latest;
-//     int service_time;
-// };
-
-// struct Route {
-//     vector<int> customers;
-//     int total_demand = 0;
-// };
 
 using Solution = vector<Route>;
 
@@ -64,47 +51,6 @@ bool is_solution_feasible(const Solution& sol) {
     return true;
 }
 
-// bool all_customers_served_once(const Solution& sol, int customer_count) {
-//     vector<int> visit_count(customer_count, 0);
-//     for (const auto& route : sol) {
-//         for (int cust : route.customers) {
-//             visit_count[cust]++;
-//         }
-//     }
-//     for (int i = 1; i < customer_count; ++i) {
-//         if (visit_count[i] != 1)
-//             return false;
-//     }
-//     return true;
-// }
-
-// bool check_demands(const Solution& sol) {
-//     for (const auto& route : sol) {
-//         if (route.total_demand > Q)
-//             return false;
-//     }
-//     return true;
-// }
-
-// bool check_time_windows(const Solution& sol) {
-//     for (const auto& route : sol) {
-//         double time = 0.0;
-//         for (size_t i = 0; i < route.customers.size() - 1; ++i) {
-//             const Customer& current = customers[route.customers[i]];
-//             const Customer& next = customers[route.customers[i + 1]];
-//             time = max(time, static_cast<double>(current.earliest));
-//             time += current.service_time;
-//             time += dist[current.id][next.id];
-//             if (time > next.latest) {
-//                 cout << "⚠️ Customer " << next.id
-//                      << " violated time window. Arrival: " << time
-//                      << ", Latest: " << next.latest << endl;
-//                 return false;
-//             }
-//         }
-//     }
-//     return true;
-// }
 
 double rand01() {
     return static_cast<double>(rand()) / RAND_MAX;
