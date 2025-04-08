@@ -4,6 +4,7 @@ Route 2: 13 17 18 19 15 16 14 12
 
 Route 3: 20 24 25 23 22 21
 
-Number of vehicles used: 3
-Total distance: 191.81
+Vehicles: 3
+
+Distance: 191.81
 

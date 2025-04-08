@@ -16,6 +16,7 @@ Route 8: 172 197 181 171 180 184 188 192 194
 
 Route 9: 196 190
 
-Number of vehicles used: 9
-Total distance: 5101.99
+Vehicles: 9
+
+Distance: 5101.99
 
