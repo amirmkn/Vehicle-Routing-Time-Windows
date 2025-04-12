@@ -208,17 +208,29 @@ bool time_or_eval_limit_reached() {
     return false;
 }
 
+bool is_different(const Solution& a, const Solution& b) {
+    for (int i = 0; i < a.size(); ++i) {
+        if (a[i].customers != b[i].customers)
+            return true;
+    }
+    return false;
+}
+
+
 // Enhanced neighbor generation: randomly chooses either a removal–insertion or a swap move.
 Solution generate_neighbor(const Solution& sol) {
     Solution neighbor = sol;
+    
     int moveType = rand() % 2; // 0: removal-insertion, 1: swap
 
     if (moveType == 0) {
+        cout << "Generating neighbor from current solution: removal-insertion" ;
         // Removal–insertion move
         int v1 = rand() % M;
         int v2 = rand() % M;
 
         if (neighbor[v1].customers.size() <= 2)
+        cout << "Route " << v1 << " too small to remove from." << endl;
             return neighbor;
 
         int pos = rand() % (neighbor[v1].customers.size() - 2) + 1;
@@ -228,6 +240,14 @@ Solution generate_neighbor(const Solution& sol) {
         neighbor[v1].total_demand -= customers[cust].demand;
 
         int insert_pos = rand() % (neighbor[v2].customers.size() - 1) + 1;
+        
+        if (!(neighbor[v2].total_demand + customers[cust].demand <= Q)) {
+            cout << "Insertion violates capacity constraint for vehicle " << v2 << endl;
+        } else if (!can_insert_customer(neighbor[v2], cust, insert_pos)) {
+            cout << "Insertion at position " << insert_pos << " is not feasible (time windows, etc.)." << endl;
+        } else {
+            cout << "Successfully inserted customer " << cust << " from vehicle " << v1 << " to vehicle " << v2 << endl;
+        }
 
         if (neighbor[v2].total_demand + customers[cust].demand <= Q &&
             can_insert_customer(neighbor[v2], cust, insert_pos)) {
@@ -237,11 +257,13 @@ Solution generate_neighbor(const Solution& sol) {
         }
     } else {
         // Swap move between two routes
+        cout << "Generating neighbor from current solution: Swap" ;
         int r1 = rand() % M;
         int r2 = rand() % M;
         if (r1 == r2 ||
             neighbor[r1].customers.size() <= 2 ||
             neighbor[r2].customers.size() <= 2)
+            cout << "Invalid swap candidates: r1=" << r1 << ", r2=" << r2 << " (too small or same route)" << endl;
             return neighbor;
 
         int pos1 = rand() % (neighbor[r1].customers.size() - 2) + 1;
@@ -255,6 +277,11 @@ Solution generate_neighbor(const Solution& sol) {
 
             // Tentatively swap customers
             swap(neighbor[r1].customers[pos1], neighbor[r2].customers[pos2]);
+            if (!is_feasible(neighbor[r1]) || !is_feasible(neighbor[r2])) {
+                cout << "Swap caused infeasible route. Reverted." << endl;
+            } else {
+                cout << "Swapped customer " << cust1 << " (from v" << r1 << ") with customer " << cust2 << " (from v" << r2 << ")" << endl;
+            }
             if (is_feasible(neighbor[r1]) && is_feasible(neighbor[r2])) {
                 neighbor[r1].total_demand = neighbor[r1].total_demand - customers[cust1].demand + customers[cust2].demand;
                 neighbor[r2].total_demand = neighbor[r2].total_demand - customers[cust2].demand + customers[cust1].demand;
@@ -273,7 +300,7 @@ Solution simulated_annealing(Solution initial, double T, double alpha, int max_i
     double current_cost = calculate_cost(current);
     double best_cost = current_cost;
     int stagnation_counter = 0;
-    int max_stagnation = 200;
+    int max_stagnation = 500;
     int reheats = 0;
     double init_temp = T;
 
@@ -283,6 +310,12 @@ Solution simulated_annealing(Solution initial, double T, double alpha, int max_i
         evaluation_count++;
 
         Solution neighbor = generate_neighbor(current);
+        if (is_different(neighbor, current)) {
+            cout << "✅ New neighbor generated." << endl;
+        } else {
+            cout << "⚠️  Neighbor is the same as current solution. No change." << endl;
+        }
+
         double neighbor_cost = calculate_cost(neighbor);
         double delta = neighbor_cost - current_cost;
 
@@ -314,7 +347,7 @@ Solution simulated_annealing(Solution initial, double T, double alpha, int max_i
 
         // Reheat if stagnation is detected
         if (stagnation_counter >= max_stagnation) {
-            T = init_temp*2; // Reset to initial temperature
+            T = T*2; // Reset to initial temperature
             stagnation_counter = 0;
             reheats++;
             logFile << ">>> Reheating! Temp reset to: " << T << std::endl;
@@ -470,7 +503,7 @@ int main(int argc, char* argv[]) {
 
     // Write solution and checks to output file
     write_solution_to_file(best, instance_name);
-    // cout << validate_solution(best);
+    cout << validate_solution(best);
 
 
     return 0;
