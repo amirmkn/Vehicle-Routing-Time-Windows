@@ -217,84 +217,229 @@ bool is_different(const Solution& a, const Solution& b) {
 }
 
 
-// Enhanced neighbor generation: randomly chooses either a removal–insertion or a swap move.
-Solution generate_neighbor(const Solution& sol) {
-    Solution neighbor = sol;
-    
-    int moveType = rand() % 2; // 0: removal-insertion, 1: swap
+// Operator weighting parameters for adaptive operator selection:
+double op_weight[4] = {1.0, 1.0, 1.0, 1.0};  // initial equal weight
+int op_success[4] = {0, 0, 0, 0};
+int op_total[4] = {0, 0, 0, 0};
 
-    if (moveType == 0) {
-        cout << "Generating neighbor from current solution: removal-insertion" ;
-        // Removal–insertion move
-        int v1 = rand() % M;
-        int v2 = rand() % M;
-
-        if (neighbor[v1].customers.size() <= 2)
-        cout << "Route " << v1 << " too small to remove from." << endl;
-            return neighbor;
-
-        int pos = rand() % (neighbor[v1].customers.size() - 2) + 1;
-        int cust = neighbor[v1].customers[pos];
-
-        neighbor[v1].customers.erase(neighbor[v1].customers.begin() + pos);
-        neighbor[v1].total_demand -= customers[cust].demand;
-
-        int insert_pos = rand() % (neighbor[v2].customers.size() - 1) + 1;
-        
-        if (!(neighbor[v2].total_demand + customers[cust].demand <= Q)) {
-            cout << "Insertion violates capacity constraint for vehicle " << v2 << endl;
-        } else if (!can_insert_customer(neighbor[v2], cust, insert_pos)) {
-            cout << "Insertion at position " << insert_pos << " is not feasible (time windows, etc.)." << endl;
-        } else {
-            cout << "Successfully inserted customer " << cust << " from vehicle " << v1 << " to vehicle " << v2 << endl;
-        }
-
-        if (neighbor[v2].total_demand + customers[cust].demand <= Q &&
-            can_insert_customer(neighbor[v2], cust, insert_pos)) {
-            neighbor[v2].customers.insert(neighbor[v2].customers.begin() + insert_pos, cust);
-            neighbor[v2].total_demand += customers[cust].demand;
-            return neighbor;
-        }
-    } else {
-        // Swap move between two routes
-        cout << "Generating neighbor from current solution: Swap" ;
-        int r1 = rand() % M;
-        int r2 = rand() % M;
-        if (r1 == r2 ||
-            neighbor[r1].customers.size() <= 2 ||
-            neighbor[r2].customers.size() <= 2)
-            cout << "Invalid swap candidates: r1=" << r1 << ", r2=" << r2 << " (too small or same route)" << endl;
-            return neighbor;
-
-        int pos1 = rand() % (neighbor[r1].customers.size() - 2) + 1;
-        int pos2 = rand() % (neighbor[r2].customers.size() - 2) + 1;
-        int cust1 = neighbor[r1].customers[pos1];
-        int cust2 = neighbor[r2].customers[pos2];
-
-        // Check capacity feasibility for swap
-        if (neighbor[r1].total_demand - customers[cust1].demand + customers[cust2].demand <= Q &&
-            neighbor[r2].total_demand - customers[cust2].demand + customers[cust1].demand <= Q) {
-
-            // Tentatively swap customers
-            swap(neighbor[r1].customers[pos1], neighbor[r2].customers[pos2]);
-            if (!is_feasible(neighbor[r1]) || !is_feasible(neighbor[r2])) {
-                cout << "Swap caused infeasible route. Reverted." << endl;
-            } else {
-                cout << "Swapped customer " << cust1 << " (from v" << r1 << ") with customer " << cust2 << " (from v" << r2 << ")" << endl;
-            }
-            if (is_feasible(neighbor[r1]) && is_feasible(neighbor[r2])) {
-                neighbor[r1].total_demand = neighbor[r1].total_demand - customers[cust1].demand + customers[cust2].demand;
-                neighbor[r2].total_demand = neighbor[r2].total_demand - customers[cust2].demand + customers[cust1].demand;
-                return neighbor;
-            }
-            // Otherwise, swap back if infeasible
-            swap(neighbor[r1].customers[pos1], neighbor[r2].customers[pos2]);
-        }
+// Returns an operator index [0,3] based on weights.
+int select_operator() {
+    // Compute sum of weights:
+    double sum = 0.0;
+    for (int i = 0; i < 4; i++) {
+        sum += op_weight[i];
     }
-    return sol;
+    // Generate a random number [0, sum)
+    double rnd = ((double) rand() / RAND_MAX) * sum;
+    double cumulative = 0;
+    for (int i = 0; i < 4; i++) {
+        cumulative += op_weight[i];
+        if (rnd < cumulative)
+            return i;
+    }
+    return 0; // fallback
 }
 
-Solution simulated_annealing(Solution initial, double T, double alpha, int max_iter) {
+// Intra-route 2-opt reversal operator (operator 2)
+// Reverse a subsequence within a route.
+bool two_opt_move(Route &route, ofstream& logFile) {
+    int n = route.customers.size();
+    if (n <= 3) return false;  // Nothing to reverse inside
+    int i = rand() % (n - 2) + 1;
+    int j = rand() % (n - i - 1) + i + 1;
+    // Reverse the sub-route between i and j
+    reverse(route.customers.begin() + i, route.customers.begin() + j + 1);
+    // Check route feasibility (time windows, etc.)
+    if (!is_feasible(route)) {
+        // Revert the change
+        reverse(route.customers.begin() + i, route.customers.begin() + j + 1);
+        return false;
+    }
+    return true;
+}
+
+// Or-opt move (operator 3)
+// Move a block of 1 or 2 consecutive customers from one route to another.
+bool or_opt_move(Solution &sol, ofstream& logFile) {
+    int r1 = rand() % M;
+    int r2 = rand() % M;
+    if (r1 == r2 || sol[r1].customers.size() <= 3) return false;
+    
+    // Choose block length (1 or 2) as long as feasible in r1.
+    int max_block = min(2, (int)sol[r1].customers.size() - 2);
+    int block_len = rand() % max_block + 1;
+    
+    int pos_from = rand() % (sol[r1].customers.size() - block_len - 1) + 1;
+    // Determine total demand of the block
+    int block_demand = 0;
+    for (int i = 0; i < block_len; i++) {
+        int cust = sol[r1].customers[pos_from + i];
+        block_demand += customers[cust].demand;
+    }
+    
+    // Find an insertion position in route r2
+    int insert_pos = rand() % (sol[r2].customers.size() - 1) + 1;
+    
+    if (sol[r2].total_demand + block_demand > Q) {
+        return false;
+    }
+    
+    // Try insertion check for each customer in the block.
+    bool feasible = true;
+    for (int i = 0; i < block_len; i++) {
+        if (!can_insert_customer(sol[r2], sol[r1].customers[pos_from + i], insert_pos + i)) {
+            feasible = false;
+            break;
+        }
+    }
+    if (!feasible) return false;
+    
+    // Remove block from r1
+    vector<int> block(sol[r1].customers.begin() + pos_from, sol[r1].customers.begin() + pos_from + block_len);
+    sol[r1].customers.erase(sol[r1].customers.begin() + pos_from, sol[r1].customers.begin() + pos_from + block_len);
+    for (int cust : block) {
+        sol[r1].total_demand -= customers[cust].demand;
+    }
+    
+    // Insert block into r2
+    sol[r2].customers.insert(sol[r2].customers.begin() + insert_pos, block.begin(), block.end());
+    for (int cust : block) {
+        sol[r2].total_demand += customers[cust].demand;
+    }
+    
+    if (!is_feasible(sol[r1]) || !is_feasible(sol[r2])) {
+        // Revert if infeasible (this requires more careful bookkeeping in practice)
+        return false;
+    }
+    return true;
+}
+// Enhanced neighbor generation: randomly chooses either a removal–insertion or a swap move.
+// Main neighbor generation function
+Solution generate_neighbor(const Solution& sol) {
+    // Open log file in append mode
+    ofstream logFile("neighbor_generation.txt", ios::app);
+    if (!logFile.is_open()) {
+        cerr << "Error opening log file" << endl;
+        return sol;
+    }
+    
+    Solution neighbor = sol;
+    int op = select_operator();
+    op_total[op]++;
+    bool moveApplied = false;
+    
+    switch (op) {
+        case 0: {
+            logFile << "Operator: Removal–insertion" << endl;
+            int v1 = rand() % M;
+            int v2 = rand() % M;
+            if (neighbor[v1].customers.size() <= 2) {
+                logFile << "Route " << v1 << " too small to remove from." << endl;
+                break;
+            }
+            int pos = rand() % (neighbor[v1].customers.size() - 2) + 1;
+            int cust = neighbor[v1].customers[pos];
+            neighbor[v1].customers.erase(neighbor[v1].customers.begin() + pos);
+            neighbor[v1].total_demand -= customers[cust].demand;
+    
+            int insert_pos = rand() % (neighbor[v2].customers.size() - 1) + 1;
+            if (neighbor[v2].total_demand + customers[cust].demand <= Q &&
+                can_insert_customer(neighbor[v2], cust, insert_pos)) {
+                neighbor[v2].customers.insert(neighbor[v2].customers.begin() + insert_pos, cust);
+                neighbor[v2].total_demand += customers[cust].demand;
+                moveApplied = true;
+                logFile << "Successfully inserted customer " << cust 
+                        << " from vehicle " << v1 << " to vehicle " << v2 << endl;
+            } else {
+                logFile << "Insertion move violated capacity or feasibility for vehicle " << v2 << endl;
+            }
+            break;
+        }
+        case 1: {
+            logFile << "Operator: Swap" << endl;
+            int r1 = rand() % M;
+            int r2 = rand() % M;
+            if (r1 == r2 ||
+                neighbor[r1].customers.size() <= 2 ||
+                neighbor[r2].customers.size() <= 2) {
+                logFile << "Invalid swap candidates: r1=" << r1 << ", r2=" << r2 
+                        << " (too small or same route)" << endl;
+                break;
+            }
+    
+            int pos1 = rand() % (neighbor[r1].customers.size() - 2) + 1;
+            int pos2 = rand() % (neighbor[r2].customers.size() - 2) + 1;
+            int cust1 = neighbor[r1].customers[pos1];
+            int cust2 = neighbor[r2].customers[pos2];
+    
+            if (neighbor[r1].total_demand - customers[cust1].demand + customers[cust2].demand <= Q &&
+                neighbor[r2].total_demand - customers[cust2].demand + customers[cust1].demand <= Q) {
+    
+                swap(neighbor[r1].customers[pos1], neighbor[r2].customers[pos2]);
+                if (!is_feasible(neighbor[r1]) || !is_feasible(neighbor[r2])) {
+                    logFile << "Swap caused infeasible route. Reverted." << endl;
+                    swap(neighbor[r1].customers[pos1], neighbor[r2].customers[pos2]);
+                } else {
+                    neighbor[r1].total_demand = neighbor[r1].total_demand - customers[cust1].demand + customers[cust2].demand;
+                    neighbor[r2].total_demand = neighbor[r2].total_demand - customers[cust2].demand + customers[cust1].demand;
+                    logFile << "Swapped customer " << cust1 << " (from v" << r1 
+                            << ") with customer " << cust2 << " (from v" << r2 << ")" << endl;
+                    moveApplied = true;
+                }
+            }
+            break;
+        }
+        case 2: {
+            logFile << "Operator: 2-opt (intra-route reversal)" << endl;
+            int r = rand() % M;
+            moveApplied = two_opt_move(neighbor[r], logFile);
+            if (moveApplied)
+                logFile << "Performed 2-opt on route " << r << endl;
+            else
+                logFile << "2-opt move on route " << r << " was not feasible." << endl;
+            break;
+        }
+        case 3: {
+            logFile << "Operator: Or-opt block move" << endl;
+            moveApplied = or_opt_move(neighbor, logFile);
+            if (moveApplied)
+                logFile << "Or-opt move applied." << endl;
+            else
+                logFile << "Or-opt move could not be applied." << endl;
+            break;
+        }
+        default:
+            break;
+    }
+    
+    // Adaptive operator weight update
+    if (moveApplied && neighbor != sol) {
+        op_success[op]++;
+        op_weight[op] += 0.1;
+    } else {
+        op_weight[op] = max(0.1, op_weight[op] - 0.05);
+    }
+    
+    logFile.close();
+    return (moveApplied) ? neighbor : sol;
+}
+
+
+#include <cmath>
+#include <fstream>
+#include <iostream>
+#include <chrono>
+
+// Assume these functions and global variables are defined elsewhere:
+// - calculate_cost(Solution)
+// - generate_neighbor(Solution)
+// - is_different(Solution, Solution)
+// - time_or_eval_limit_reached()
+// - evaluation_count, start_time, rand01(), etc.
+  
+Solution simulated_annealing(Solution initial, double T0, double alpha, int max_iter) {
+    using namespace std::chrono;
+    
     Solution current = initial;
     Solution best = current;
     double current_cost = calculate_cost(current);
@@ -302,28 +447,31 @@ Solution simulated_annealing(Solution initial, double T, double alpha, int max_i
     int stagnation_counter = 0;
     int max_stagnation = 500;
     int reheats = 0;
-    double init_temp = T;
 
-    std::ofstream logFile("log.txt");
-
-    for (int iter = 0; !time_or_eval_limit_reached(); ++iter) {
+    std::ofstream logFile("log.txt", std::ios::app);
+    if (!logFile.is_open()) {
+        std::cerr << "Unable to open log file!" << std::endl;
+        return initial;
+    }
+    
+    int iter = 0;
+    while (!time_or_eval_limit_reached() && iter < max_iter) {
         evaluation_count++;
 
         Solution neighbor = generate_neighbor(current);
         if (is_different(neighbor, current)) {
-            cout << "✅ New neighbor generated." << endl;
+            logFile << "Iter " << iter << ": ✅ New neighbor generated." << std::endl;
         } else {
-            cout << "⚠️  Neighbor is the same as current solution. No change." << endl;
+            logFile << "Iter " << iter << ": ⚠️  Neighbor is the same as current solution. No change." << std::endl;
         }
 
         double neighbor_cost = calculate_cost(neighbor);
         double delta = neighbor_cost - current_cost;
 
-        // Acceptance criterion
-        if (delta < 0 || rand01() < exp(-delta / T)) {
+        // Acceptance criterion (Metropolis condition)
+        if (delta < 0 || rand01() < exp(-delta / T0)) {
             current = neighbor;
             current_cost = neighbor_cost;
-            // Reset stagnation counter if an improvement in the best solution is found
             if (current_cost < best_cost) {
                 best = current;
                 best_cost = current_cost;
@@ -335,41 +483,46 @@ Solution simulated_annealing(Solution initial, double T, double alpha, int max_i
             stagnation_counter++;
         }
 
-        // Logging iteration info
+        // Logging iteration information
         logFile << "Iter: " << iter
-                << ", Temp: " << T
-                << ", Best: " << best_cost
+                << ", Temp: " << T0
+                << ", Best Cost: " << best_cost
                 << ", Eval: " << evaluation_count
                 << std::endl;
 
-        // Update temperature
-        T *= alpha ;
+        // Adaptive Cooling: using logarithmic schedule
+        // This schedule slows down the cooling as iterations increase.
+        T0 = T0 / (1 + alpha * std::log(1 + iter));
 
-        // Reheat if stagnation is detected
+        // Adaptive reheating: if we see too many iterations without improvement.
         if (stagnation_counter >= max_stagnation) {
-            T = T*2; // Reset to initial temperature
+            // Instead of doubling, we add a fraction of the initial temperature.
+            double reheat_amount = 0.5 * T0;  // This could be tuned
+            T0 += reheat_amount;
             stagnation_counter = 0;
             reheats++;
-            logFile << ">>> Reheating! Temp reset to: " << T << std::endl;
+            logFile << ">>> Adaptive Reheating! Temp increased to: " << T0 << std::endl;
         }
-        // Check for low temperature and reheat if necessary
-        if (T < 1e-3) {
-            T = init_temp;
-            logFile << ">>> Reheating due to low temp. Temp reset to: " << T << std::endl;
+        // Optionally, if the temperature gets too low, bring it back closer to T0_initial
+        if (T0 < 1e-3) {
+            T0 = 1e-3 * 10;
+            logFile << ">>> Reheating due to low temperature, Temp reset to: " << T0 << std::endl;
         }
+
+        iter++;
     }
     logFile << "Total reheats: " << reheats << std::endl;
     logFile.close();
 
     auto now = steady_clock::now();
     std::chrono::duration<double> elapsed = now - start_time;
-
-    cout << "🔁 Evaluations done: " << evaluation_count << endl;
-    cout << "⏱️  Time elapsed: " << elapsed.count() << " seconds" << endl;
-    cout << "🔥 Final temperature: " << T << endl;
+    std::cout << "🔁 Evaluations done: " << evaluation_count << std::endl;
+    std::cout << "⏱️  Time elapsed: " << elapsed.count() << " seconds" << std::endl;
+    std::cout << "🔥 Final temperature: " << T0 << std::endl;
 
     return best;
 }
+
 
 
 // This function writes the final solution and checks to an output file.
@@ -481,7 +634,7 @@ int main(int argc, char* argv[]) {
 
     // Adjusted parameters: initial temperature and a slower cooling schedule.
     double initial_temp = 1000.0;
-    double cooling_factor = 0.997;
+    double cooling_factor = 0.998;
     int max_iter = 10000000;
 
     // Choose the initialization method based on the input argument

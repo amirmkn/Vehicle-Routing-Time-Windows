@@ -18,7 +18,14 @@ struct Customer {
 struct Route {
     vector<int> customers;
     int total_demand = 0;
+    
+    // Overload operator== for Route inside the struct (or outside, as an inline function)
+    friend bool operator==(const Route &lhs, const Route &rhs) {
+        return lhs.customers == rhs.customers &&
+               lhs.total_demand == rhs.total_demand;
+    }
 };
+
 using Solution = vector<Route>;
 
 // Declaration of the validation function.
