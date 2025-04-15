@@ -229,7 +229,7 @@ double calculate_cost(const Solution& sol) {
             }
         }
     }
-    return active_routes * 100000.0 + total_distance;
+    return active_routes * 10000.0 + total_distance;
 }
 
 bool time_or_eval_limit_reached() {
@@ -257,6 +257,28 @@ const int NUM_OPERATORS = 5; // 0: Rem-In, 1: Swap, 2: 2-opt, 3: Or-opt, 4: Relo
 double op_weight[NUM_OPERATORS] = {1.0, 1.0, 1.0, 1.0, 1.0};
 int op_total[NUM_OPERATORS] = {0,0,0,0,0};
 int op_success[NUM_OPERATORS] = {0,0,0,0,0};
+
+// === Penalty-related functions ===
+
+// Returns the capacity violation for a single route.
+double capacity_violation(const Route &route) {
+    int violation = route.total_demand - Q;
+    return (violation > 0) ? violation : 0;
+}
+
+// Returns the total penalty for a solution (here, only capacity violations are penalized).
+double total_penalty(const Solution &sol) {
+    double penalty = 0.0;
+    for (const auto &route : sol) {
+        penalty += capacity_violation(route);
+    }
+    return penalty;
+}
+
+// Returns the penalized cost: raw cost + λ * (total penalty)
+double calculate_penalized_cost(const Solution &sol, double lambda) {
+    return calculate_cost(sol) + lambda * total_penalty(sol);
+}
 
 // Returns an operator index [0,3] based on weights.
 int select_operator() {
@@ -430,8 +452,9 @@ Solution perturb_solution(const Solution& sol) {
     return perturbed;
 }
 
-// Enhanced neighbor generation: randomly chooses between several operators.
-// Improved generate_neighbor function
+// Global parameter for penalizing infeasibilities.
+const double lambda = 100.0;  // Adjust according to your problem scale
+
 Solution generate_neighbor(const Solution& sol) {
     std::ofstream logFile("neighbor_generation.txt", std::ios::app);
     if (!logFile.is_open()) {
@@ -439,22 +462,26 @@ Solution generate_neighbor(const Solution& sol) {
         return sol;
     }
 
+    // Compute current penalized cost.
+    double current_penalized = calculate_penalized_cost(sol, lambda);
+
     Solution neighbor = sol;
     int op;
     if (rand() % 10 == 0) {
-        op = rand() % NUM_OPERATORS; // 10% chance to pick randomly
+        op = rand() % NUM_OPERATORS;  // 10% chance to pick randomly
     } else {
-        op = select_operator(); // weighted
+        op = select_operator();         // weighted choice of operator
     }
     op_total[op]++;
     bool moveApplied = false;
 
+    // Try applying one of the operators.
     switch (op) {
-        case 0: { // Smarter Removal–Insertion
+        case 0: {  // Smart Removal–Insertion
             logFile << "Operator: Smart Removal–Insertion" << std::endl;
             for (int attempt = 0; attempt < 10; ++attempt) {
                 int v1 = getNonEmptyRoute(neighbor);
-                int v2 = getRouteWithCapacity(neighbor, 0);
+                int v2 = getRouteWithCapacity(neighbor, 0); // still helps selecting a route with some spare capacity
                 if (v1 == -1 || v2 == -1 || v1 == v2) continue;
                 if (neighbor[v1].customers.size() <= 3) continue;
 
@@ -466,14 +493,14 @@ Solution generate_neighbor(const Solution& sol) {
                 neighbor[v1].total_demand -= customers[cust].demand;
 
                 int best_pos = -1;
-                double min_delta = DBL_MAX;
+                double best_penalized = DBL_MAX;
+                // Instead of checking feasibility, evaluate the penalized cost.
                 for (int i = 1; i < neighbor[v2].customers.size(); ++i) {
-                    if (neighbor[v2].total_demand + customers[cust].demand <= Q &&
-                        can_insert_customer(neighbor[v2], cust, i)) {
+                    if (neighbor[v2].total_demand + customers[cust].demand <= Q || true) {
                         neighbor[v2].customers.insert(neighbor[v2].customers.begin() + i, cust);
-                        double delta = calculate_cost(neighbor) - calculate_cost(sol);
-                        if (delta < min_delta) {
-                            min_delta = delta;
+                        double test_cost = calculate_penalized_cost(neighbor, lambda);
+                        if (test_cost < best_penalized) {
+                            best_penalized = test_cost;
                             best_pos = i;
                         }
                         neighbor[v2].customers.erase(neighbor[v2].customers.begin() + i);
@@ -483,19 +510,21 @@ Solution generate_neighbor(const Solution& sol) {
                 if (best_pos != -1) {
                     neighbor[v2].customers.insert(neighbor[v2].customers.begin() + best_pos, cust);
                     neighbor[v2].total_demand += customers[cust].demand;
-                    if (is_feasible(neighbor[v1]) && is_feasible(neighbor[v2])) {
+                    double new_penalized = calculate_penalized_cost(neighbor, lambda);
+                    if (new_penalized < current_penalized - 1e-3) {
                         moveApplied = true;
-                        logFile << "Inserted customer " << cust << " from route " << v1 << " to route " << v2 << std::endl;
+                        logFile << "Inserted customer " << cust << " from route " << v1 << " to route " << v2 
+                                << ", penalized Δcost: " << (new_penalized - current_penalized) << std::endl;
                         break;
                     }
                 }
+                // Revert changes if no improvement.
                 neighbor[v1] = origV1;
                 neighbor[v2] = origV2;
             }
             break;
         }
-
-        case 1: { // Swap
+        case 1: {  // Swap
             logFile << "Operator: Swap" << std::endl;
             const int max_attempts = 10;
             for (int attempt = 0; attempt < max_attempts; ++attempt) {
@@ -510,69 +539,85 @@ Solution generate_neighbor(const Solution& sol) {
                 int cust1 = neighbor[r1].customers[pos1];
                 int cust2 = neighbor[r2].customers[pos2];
         
-                double cost_before = calculate_cost(neighbor);
+                double current_pen = calculate_penalized_cost(neighbor, lambda);
         
-                if (neighbor[r1].total_demand - customers[cust1].demand + customers[cust2].demand <= Q &&
-                    neighbor[r2].total_demand - customers[cust2].demand + customers[cust1].demand <= Q) {
-                    
-                    std::swap(neighbor[r1].customers[pos1], neighbor[r2].customers[pos2]);
-        
-                    if (is_feasible(neighbor[r1]) && is_feasible(neighbor[r2])) {
-                        double cost_after = calculate_cost(neighbor);
-                        if (fabs(cost_after - cost_before) > 1e-3) {
-                            neighbor[r1].total_demand = neighbor[r1].total_demand - customers[cust1].demand + customers[cust2].demand;
-                            neighbor[r2].total_demand = neighbor[r2].total_demand - customers[cust2].demand + customers[cust1].demand;
-                            moveApplied = true;
-                            logFile << "Swapped customer " << cust1 << " (r" << r1 << ") with " << cust2 << " (r" << r2 << "), Δcost: " << (cost_after - cost_before) << "\n";
-                            break;
-                        }
-                    }
-        
-                    std::swap(neighbor[r1].customers[pos1], neighbor[r2].customers[pos2]);  // revert
+                std::swap(neighbor[r1].customers[pos1], neighbor[r2].customers[pos2]);
+                
+                double new_pen = calculate_penalized_cost(neighbor, lambda);
+                if (new_pen < current_pen - 1e-3) {
+                    // Update total demands
+                    neighbor[r1].total_demand = neighbor[r1].total_demand - customers[cust1].demand + customers[cust2].demand;
+                    neighbor[r2].total_demand = neighbor[r2].total_demand - customers[cust2].demand + customers[cust1].demand;
+                    moveApplied = true;
+                    logFile << "Swapped customer " << cust1 << " (r" << r1 << ") with " << cust2 
+                            << " (r" << r2 << "), penalized Δcost: " << (new_pen - current_pen) << "\n";
+                    break;
                 }
+        
+                std::swap(neighbor[r1].customers[pos1], neighbor[r2].customers[pos2]);  // revert
             }
             break;
         }
-        case 2: { // 2-opt
+        case 2: {  // Intra-route 2-opt move
             logFile << "Operator: Intra-route 2-opt" << std::endl;
             for (int attempt = 0; attempt < 10; ++attempt) {
                 int r = getNonEmptyRoute(neighbor);
-                if (r == -1) continue;
-                if (neighbor[r].customers.size() <= 3) continue;
-
+                if (r == -1 || neighbor[r].customers.size() <= 3) continue;
+                // Capture current penalized cost for this route change.
+                double current_pen = calculate_penalized_cost(neighbor, lambda);
+                
                 if (two_opt_move(neighbor[r], logFile)) {
-                    moveApplied = true;
-                    break;
+                    double new_pen = calculate_penalized_cost(neighbor, lambda);
+                    if (new_pen < current_pen - 1e-3) {
+                        moveApplied = true;
+                        break;
+                    }
                 }
             }
             break;
         }
-        case 3: {
+        case 3: {  // Or-opt move
             logFile << "Operator: Or-opt" << std::endl;
-            moveApplied = or_opt_move(neighbor, logFile);
+            {
+                double current_pen = calculate_penalized_cost(neighbor, lambda);
+                if (or_opt_move(neighbor, logFile)) {
+                    double new_pen = calculate_penalized_cost(neighbor, lambda);
+                    if (new_pen < current_pen - 1e-3) {
+                        moveApplied = true;
+                    }
+                }
+            }
             break;
         }
-        case 4: { // Perturbation
+        case 4: {  // Perturbation
             logFile << "Operator: Perturbation" << std::endl;
-            neighbor = perturb_solution(sol);
-            moveApplied = (neighbor != sol);
+            Solution temp = perturb_solution(sol);
+            double new_pen = calculate_penalized_cost(temp, lambda);
+            if (new_pen < current_penalized - 1e-3) {
+                neighbor = temp;
+                moveApplied = true;
+            }
             break;
         }
         default:
             break;
     }
 
-    if (moveApplied && neighbor != sol) {
+    // Update operator weights based on penalized improvement.
+    double new_penalized = calculate_penalized_cost(neighbor, lambda);
+    if (moveApplied && new_penalized < current_penalized - 1e-3 && neighbor != sol) {
         op_success[op]++;
         op_weight[op] += 0.1;
     } else {
         op_weight[op] = std::max(0.1, op_weight[op] - 0.05);
     }
 
-    logFile << "Old cost: " << calculate_cost(sol) << ", New cost: " << calculate_cost(neighbor) << std::endl;
+    logFile << "Old penalized cost: " << current_penalized
+            << ", New penalized cost: " << new_penalized << std::endl;
     logFile.close();
     return (moveApplied) ? neighbor : sol;
 }
+
 
 void update_operator_weights() {
     for (int i = 0; i < 4; i++) {
@@ -850,7 +895,8 @@ int main(int argc, char* argv[]) {
     start_time = steady_clock::now();
 
     // Tabu Search Parameters
-    int tabu_tenure = 50;          // Tabu list size or tenure (typical range: 5–100)
+    // int max_iter = 100000;         // You can tune this based on your instance size
+    int tabu_tenure = 5;          // Tabu list size or tenure (typical range: 5–100)
 
     // Choose the initialization method based on the input argument
     Solution initial;

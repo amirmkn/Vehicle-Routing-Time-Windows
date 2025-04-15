@@ -4,3 +4,11 @@
 1.SA/neighbor_generation.txt
 1.SA/*.txt
 2.TS/*.txt
+.vscode/tasks.json
+.vscode/settings.json
+.vscode/launch.json
+2.TS/ts
+2.TS/ts_v2
+2.TS/ts.dSYM/Contents/Info.plist
+2.TS/ts.dSYM/Contents/Resources/DWARF/ts
+.gitignore
