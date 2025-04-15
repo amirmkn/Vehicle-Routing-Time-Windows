@@ -83,35 +83,48 @@ double euclidean_distance(const Customer& a, const Customer& b) {
 }
 
 
+// Create a new route with a given customer inserted.
+void create_route(Solution &sol, int customer_index) {
+    Route new_route;
+    new_route.customers.push_back(DEPOT);
+    new_route.customers.push_back(customer_index);
+    new_route.customers.push_back(DEPOT);
+    new_route.total_demand = customers[customer_index].demand;
+    sol.push_back(new_route);
+}
+
+// Greedy construction based on sweep (angle) criteria.
 Solution generate_greedy_solution(){
     Solution sol;  // Initially empty: no routes
-
-    // The depot is considered already "assigned" (if needed in your logic)
-    vector<bool> assigned(customers.size(), false);
+    
+    // Mark depot as assigned.
+    std::vector<bool> assigned(customers.size(), false);
     assigned[DEPOT] = true;
 
-    // Function to create a new route with a given customer inserted
-    auto create_route = [&](int customer_index) {
-        Route new_route;
-        new_route.customers.push_back(DEPOT);
-        new_route.customers.push_back(customer_index);
-        new_route.customers.push_back(DEPOT);
-        new_route.total_demand = customers[customer_index].demand;
-        sol.push_back(new_route);
-    };
-
-    // Insertion heuristic: try to insert customer into existing routes
+    // Create a sorted list of customers (excluding the depot) by angle relative to the depot.
+    std::vector<int> sorted_customers;
     for (int i = 1; i < customers.size(); ++i) {
-        if (assigned[i])
-            continue;
-        double best_incr = numeric_limits<double>::max();
+        sorted_customers.push_back(i);
+    }
+    
+    // Compute the polar angle using atan2. The depot is assumed to have index DEPOT.
+    std::sort(sorted_customers.begin(), sorted_customers.end(), [&](int a, int b) {
+        double angleA = std::atan2(customers[a].y - customers[DEPOT].y, customers[a].x - customers[DEPOT].x);
+        double angleB = std::atan2(customers[b].y - customers[DEPOT].y, customers[b].x - customers[DEPOT].x);
+        return angleA < angleB;
+    });
+
+    // Greedy insertion: Try to insert each customer from the sorted order into an existing route.
+    for (int i : sorted_customers) {
+        double best_incr = std::numeric_limits<double>::max();
         int best_route = -1;
         int best_pos = -1;
+        // Look for an existing route where the customer fits.
         for (int r = 0; r < sol.size(); ++r) {
-            // Check if the customer can be feasibly added considering the capacity
+            // Check if the vehicle has spare capacity for customer i.
             if (sol[r].total_demand + customers[i].demand > Q)
                 continue;
-            // Try every possible insertion position within route r (between depots and inserted customers)
+            // Test every potential insertion position within the route.
             for (size_t pos = 1; pos < sol[r].customers.size(); ++pos) {
                 int prev = sol[r].customers[pos - 1];
                 int next = sol[r].customers[pos];
@@ -125,46 +138,44 @@ Solution generate_greedy_solution(){
                 }
             }
         }
-        // If found a feasible insertion in an existing route, insert customer i there
+
+        // If a feasible position was found, insert customer i.
         if (best_route != -1) {
             sol[best_route].customers.insert(sol[best_route].customers.begin() + best_pos, i);
             sol[best_route].total_demand += customers[i].demand;
             assigned[i] = true;
         } else {
-            // No feasible insertion found in any existing route, start a new route with this customer
-            if(customers[i].demand <= Q) {
-                create_route(i);
+            // Otherwise, if the customer itself fits in a new route, create a new route.
+            if (customers[i].demand <= Q) {
+                create_route(sol, i);
                 assigned[i] = true;
             }
         }
     }
 
-    // In the rare instance that some customers remain unassigned (e.g., due to routing restrictions),
-    // try to insert them at the end of any route where they fit.
+    // In the rare instance that some customers remain unassigned, try to insert them at the end of any route.
     for (int i = 1; i < customers.size(); ++i) {
         if (!assigned[i]) {
             for (int r = 0; r < sol.size(); ++r) {
                 int pos = sol[r].customers.size() - 1; // before final depot
-                if (sol[r].total_demand + customers[i].demand <= Q &&
-                    can_insert_customer(sol[r], i, pos)) {
+                if (sol[r].total_demand + customers[i].demand <= Q && can_insert_customer(sol[r], i, pos)) {
                     sol[r].customers.insert(sol[r].customers.begin() + pos, i);
                     sol[r].total_demand += customers[i].demand;
                     assigned[i] = true;
                     break;
                 }
             }
-            // If still not assigned, you might need to create a new route (if feasible) or handle infeasibility.
+            // If still not assigned and the customer fits in a new route, do so.
             if (!assigned[i] && customers[i].demand <= Q) {
-                create_route(i);
+                create_route(sol, i);
                 assigned[i] = true;
             }
         }
     }
 
-    // Finally, ensure that we only return routes that have actual customers (besides the depots)
-    // This is more of a safeguard since the above logic should avoid creating empty routes.
+    // Filter out any empty routes (those with just the depots).
     Solution sol_nonempty;
-    for (const auto& route : sol) {
+    for (const auto &route : sol) {
         if (route.customers.size() > 2) {  // more than just the two depot entries
             sol_nonempty.push_back(route);
         }
