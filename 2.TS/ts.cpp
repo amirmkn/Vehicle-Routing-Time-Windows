@@ -633,17 +633,22 @@ bool solution_equal(const Solution &s1, const Solution &s2) {
     return true;
 }
 
-bool is_tabu(const Solution &candidate, const vector<TabuEntry> &tabu_list) {
+bool is_tabu(const Solution &candidate, const vector<TabuEntry> &tabu_list, double candidate_cost, double best_cost) {
     for (const auto &entry : tabu_list) {
-        if (solution_equal(candidate, entry.sol))
+        if (solution_equal(candidate, entry.sol)) {
+            // Aspiration criterion: allow if better than best
+            if (candidate_cost < best_cost)
+                return false;
             return true;
+        }
     }
     return false;
 }
 
+
 Solution tabu_search(Solution initial, int tabu_tenure) {
     // Base exploration parameter (lambda) for probabilistic acceptance.
-    const double lambda = 100.0;              // Normal mode: acceptance probability factor.
+    const double lambda = 200.0;              // Normal mode: acceptance probability factor.
     const double lambda_explore = 1000.0;       // Exploratory mode: higher lambda => more likely to accept worse moves.
     const int consistency_threshold = 100;      // Trigger exploration after 100 evaluations without improvement.
     
@@ -673,8 +678,8 @@ Solution tabu_search(Solution initial, int tabu_tenure) {
         
         // Check Tabu list with aspiration criterion
         int trials = 0;
-        const int max_trials = 10;
-        while (is_tabu(candidate, tabu_list) && candidate_cost >= best_cost && trials < max_trials) {
+        const int max_trials = 20;
+        while (is_tabu(candidate, tabu_list, candidate_cost, best_cost) && trials < max_trials) {
             candidate = generate_neighbor(current);
             candidate_cost = calculate_cost(candidate);
             trials++;
