@@ -13,3 +13,7 @@
 2.TS/ts.dSYM/Contents/Resources/DWARF/ts
 .gitignore
 2.TS/ts
+3.GRASP/neighbor_generation.txt
+.gitignore
+3.GRASP/gr
+3.GRASP/sa800_output.txt

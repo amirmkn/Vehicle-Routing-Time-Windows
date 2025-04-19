@@ -84,94 +84,114 @@ void create_route(Solution &sol, int customer_index) {
     sol.push_back(new_route);
 }
 
+double compute_insertion_cost(const vector<int>& route, int insert_pos, const Customer& new_cust,
+    const vector<Customer>& customers) {
+int prev = route[insert_pos - 1];
+int next = route[insert_pos];
+
+double removed = euclidean_distance(customers[prev], customers[next]);
+double added = euclidean_distance(customers[prev], new_cust) + euclidean_distance(new_cust, customers[next]);
+
+return added - removed;
+}
+
+// Compute the cost increase of inserting customer `cust` into `route`
+// at position `pos` (between customers[pos-1] and customers[pos]).
+double insertion_cost(const Route &route,
+    int cust,
+    int pos,
+    const vector<vector<double>> &dist) {
+int prev = route.customers[pos - 1];
+int next = route.customers[pos];
+
+double removed = dist[prev][next];
+double added   = dist[prev][cust] + dist[cust][next];
+return added - removed;
+}
+
+// Compute the total cost of serving `cust` in a brand‑new route
+// (depot → cust → depot).
+double route_cost_for_new_customer(int cust,
+                 const vector<vector<double>> &dist) {
+return dist[DEPOT][cust] + dist[cust][DEPOT];
+}
+
 // Greedy construction based on sweep (angle) criteria.
-Solution generate_greedy_solution(){
-    Solution sol;  // Initially empty: no routes
-    
-    // Mark depot as assigned.
+// α ∈ [0,1] controls greed vs. randomness
+Solution construct_grasp_solution(double alpha) {
+    Solution sol;
     std::vector<bool> assigned(customers.size(), false);
     assigned[DEPOT] = true;
 
-    // Create a sorted list of customers (excluding the depot) by angle relative to the depot.
-    std::vector<int> sorted_customers;
-    for (int i = 1; i < customers.size(); ++i) {
-        sorted_customers.push_back(i);
-    }
-    
-    // Compute the polar angle using atan2. The depot is assumed to have index DEPOT.
-    std::sort(sorted_customers.begin(), sorted_customers.end(), [&](int a, int b) {
-        double angleA = std::atan2(customers[a].y - customers[DEPOT].y, customers[a].x - customers[DEPOT].x);
-        double angleB = std::atan2(customers[b].y - customers[DEPOT].y, customers[b].x - customers[DEPOT].x);
-        return angleA < angleB;
-    });
+    // Keep a list of all unassigned customers
+    std::vector<int> unassigned;
+    for (int i = 1; i < customers.size(); ++i)
+        unassigned.push_back(i);
 
-    // Greedy insertion: Try to insert each customer from the sorted order into an existing route.
-    for (int i : sorted_customers) {
-        double best_incr = std::numeric_limits<double>::max();
-        int best_route = -1;
-        int best_pos = -1;
-        // Look for an existing route where the customer fits.
-        for (int r = 0; r < sol.size(); ++r) {
-            // Check if the vehicle has spare capacity for customer i.
-            if (sol[r].total_demand + customers[i].demand > Q)
-                continue;
-            // Test every potential insertion position within the route.
-            for (size_t pos = 1; pos < sol[r].customers.size(); ++pos) {
-                int prev = sol[r].customers[pos - 1];
-                int next = sol[r].customers[pos];
-                double cost_removed = dist[prev][next];
-                double cost_added = dist[prev][i] + dist[i][next];
-                double incr = cost_added - cost_removed;
-                if (incr < best_incr && can_insert_customer(sol[r], i, pos)) {
-                    best_incr = incr;
-                    best_route = r;
-                    best_pos = pos;
-                }
-            }
-        }
+    // While there are still customers to insert
+    while (!unassigned.empty()) {
+        struct Insertion { int cust, route, pos; double cost_inc; };
+        std::vector<Insertion> cand_list;
 
-        // If a feasible position was found, insert customer i.
-        if (best_route != -1) {
-            sol[best_route].customers.insert(sol[best_route].customers.begin() + best_pos, i);
-            sol[best_route].total_demand += customers[i].demand;
-            assigned[i] = true;
-        } else {
-            // Otherwise, if the customer itself fits in a new route, create a new route.
-            if (customers[i].demand <= Q) {
-                create_route(sol, i);
-                assigned[i] = true;
-            }
-        }
-    }
-
-    // In the rare instance that some customers remain unassigned, try to insert them at the end of any route.
-    for (int i = 1; i < customers.size(); ++i) {
-        if (!assigned[i]) {
+        // For each unassigned customer, evaluate its best insertion over all current routes (and the option to open a new one)
+        for (int c : unassigned) {
+            double best_inc = std::numeric_limits<double>::max();
+            int best_r = -1, best_p = -1;
+            // try existing routes
             for (int r = 0; r < sol.size(); ++r) {
-                int pos = sol[r].customers.size() - 1; // before final depot
-                if (sol[r].total_demand + customers[i].demand <= Q && can_insert_customer(sol[r], i, pos)) {
-                    sol[r].customers.insert(sol[r].customers.begin() + pos, i);
-                    sol[r].total_demand += customers[i].demand;
-                    assigned[i] = true;
-                    break;
+                if (sol[r].total_demand + customers[c].demand > Q) continue;
+                for (size_t p = 1; p < sol[r].customers.size(); ++p) {
+                    double incr = insertion_cost(sol[r], c, p,dist);
+                    if (incr < best_inc && can_insert_customer(sol[r], c, p)) {
+                        best_inc = incr; best_r = r; best_p = p;
+                    }
                 }
             }
-            // If still not assigned and the customer fits in a new route, do so.
-            if (!assigned[i] && customers[i].demand <= Q) {
-                create_route(sol, i);
-                assigned[i] = true;
+            // also allow new route
+            if (customers[c].demand <= Q && 0 < best_inc) {
+                double incr_new = route_cost_for_new_customer(c,dist);
+                if (incr_new < best_inc) {
+                    best_inc = incr_new; best_r = -1; best_p = -1;
+                }
             }
+            if (best_inc < std::numeric_limits<double>::max())
+                cand_list.push_back({c, best_r, best_p, best_inc});
         }
+
+        // Build RCL: sort by cost_inc
+        std::sort(cand_list.begin(), cand_list.end(),
+                  [](auto &a, auto &b){ return a.cost_inc < b.cost_inc; });
+        double min_inc = cand_list.front().cost_inc;
+        double max_inc = cand_list.back().cost_inc;
+        double threshold = min_inc + alpha * (max_inc - min_inc);
+
+        // Filter RCL
+        std::vector<Insertion> RCL;
+        for (auto &ins : cand_list)
+            if (ins.cost_inc <= threshold)
+                RCL.push_back(ins);
+
+        // Pick one at random
+        auto pick = RCL[rand() % RCL.size()];
+        // Perform insertion
+        if (pick.route == -1)
+            create_route(sol, pick.cust);
+        else {
+            sol[pick.route].customers.insert(
+                sol[pick.route].customers.begin() + pick.pos, pick.cust);
+            sol[pick.route].total_demand += customers[pick.cust].demand;
+        }
+
+        // Mark done and remove from unassigned
+        assigned[pick.cust] = true;
+        unassigned.erase(std::find(unassigned.begin(), unassigned.end(), pick.cust));
     }
 
-    // Filter out any empty routes (those with just the depots).
-    Solution sol_nonempty;
-    for (const auto &route : sol) {
-        if (route.customers.size() > 2) {  // more than just the two depot entries
-            sol_nonempty.push_back(route);
-        }
-    }
-    return sol_nonempty;
+    // clean empty routes
+    Solution out;
+    for (auto &r : sol)
+      if (r.customers.size() > 2) out.push_back(r);
+    return out;
 }
 
 
@@ -607,146 +627,48 @@ void print_solution(const Solution& sol, const std::string& filename) {
     out.close();
 }
 
-// ----- Tabu Search Implementation -----
-#include <cmath>
-// (Include other necessary headers as before)
+// ----- GRASP Implementation -----
+Solution grasp_local_search(Solution start, int max_no_improve) {
+    Solution curr = start;
+    double curr_cost = calculate_cost(curr);
+    int no_improve = 0;
 
-struct TabuEntry {
-    Solution sol;
-    int tenure;
-};
-
-bool solution_equal(const Solution &s1, const Solution &s2) {
-    if (s1.size() != s2.size()) return false;
-    for (size_t i = 0; i < s1.size(); i++) {
-        if (!(s1[i] == s2[i])) return false;
-    }
-    return true;
-}
-
-bool is_tabu(const Solution &candidate, const vector<TabuEntry> &tabu_list, double candidate_cost, double best_cost) {
-    for (const auto &entry : tabu_list) {
-        if (solution_equal(candidate, entry.sol)) {
-            // Aspiration criterion: allow if better than best
-            if (candidate_cost < best_cost)
-                return false;
-            return true;
-        }
-    }
-    return false;
-}
-
-
-Solution tabu_search(Solution initial, int tabu_tenure) {
-    // Base exploration parameter (lambda) for probabilistic acceptance.
-    const double lambda = 200.0;              // Normal mode: acceptance probability factor.
-    const double lambda_explore = 1000.0;       // Exploratory mode: higher lambda => more likely to accept worse moves.
-    const int consistency_threshold = 100;      // Trigger exploration after 100 evaluations without improvement.
-    
-    Solution current = initial;
-    print_solution(initial, "initial_solution.txt");
-    Solution best = current;
-    double current_cost = calculate_cost(current);
-    double best_cost = current_cost;
-    vector<TabuEntry> tabu_list;
-    
-    // Count iterations during which best hasn't improved.
-    int consistency_count = 0;
-    
-    ofstream logFile("log.txt");
-    if (!logFile.is_open()) {
-        cerr << "Unable to open log file!" << endl;
-        return initial;
-    }
-    
-    int iter = 0;
-    while (!time_or_eval_limit_reached()) {
-        evaluation_count++;
-        
-        // Generate a candidate neighbor solution.
-        Solution candidate = generate_neighbor(current);
-        double candidate_cost = calculate_cost(candidate);
-        
-        // Check Tabu list with aspiration criterion
-        int trials = 0;
-        const int max_trials = 20;
-        while (is_tabu(candidate, tabu_list, candidate_cost, best_cost) && trials < max_trials) {
-            candidate = generate_neighbor(current);
-            candidate_cost = calculate_cost(candidate);
-            trials++;
-        }
-        
-        logFile << "Iter " << iter << ": Candidate generated with cost " << candidate_cost << std::endl;
-        
-        // Determine if candidate is accepted.
-        double delta = candidate_cost - current_cost;
-        // Use an effective lambda that increases (making acceptance more generous)
-        // if the solution has been consistent (i.e., no improvement) for a while.
-        double effective_lambda = (consistency_count >= consistency_threshold) ? lambda_explore : lambda;
-        
-        if (delta < 0) {
-            // Improvement: always accept and reset consistency counter.
-            current = candidate;
-            current_cost = candidate_cost;
-            consistency_count = 0;
-            logFile << "Accepted better candidate." << std::endl;
+    while (no_improve < max_no_improve) {
+        Solution nb = generate_neighbor(curr);
+        double nb_cost = calculate_cost(nb);
+        if (nb_cost < curr_cost - 1e-6) {
+            curr = nb;
+            curr_cost = nb_cost;
+            no_improve = 0;
         } else {
-            // Accept worse candidate with probability p = exp(-delta / effective_lambda)
-            double acceptance_probability = exp(-delta / effective_lambda);
-            if (rand01() < acceptance_probability) {
-                current = candidate;
-                current_cost = candidate_cost;
-                logFile << "Accepted worse candidate with probability " << acceptance_probability << std::endl;
-            } else {
-                logFile << "Rejected worse candidate (probability " << acceptance_probability << ")." << std::endl;
-            }
-            consistency_count++; // Increment consistency count since no improvement on best.
+            ++no_improve;
         }
-        
-        // Check and update best solution if an improvement is found.
-        if (current_cost < best_cost) {
-            best = current;
-            best_cost = current_cost;
-            logFile << ">>> New best found with cost " << best_cost << std::endl;
-            consistency_count = 0;  // Reset, since improvement was found.
-        }
-        
-        // Optionally, if you're entering exploration mode, log it.
-        if (consistency_count == consistency_threshold)
-            logFile << ">>> Exploration mode triggered after " << consistency_threshold << " consistent evaluations." << std::endl;
-        
-        // Add current solution to the Tabu list.
-        tabu_list.push_back({current, tabu_tenure});
-        for (auto it = tabu_list.begin(); it != tabu_list.end(); ) {
-            it->tenure--;
-            if (it->tenure <= 0)
-                it = tabu_list.erase(it);
-            else
-                ++it;
-        }
-        
-        logFile << "Iter: " << iter
-                << ", Current Cost: " << current_cost
-                << ", Best Cost: " << best_cost
-                << ", Tabu List Size: " << tabu_list.size()
-                << ", Consistency Count: " << consistency_count
-                << ", Eval: " << evaluation_count
-                << std::endl;
-        
-        iter++;
     }
-    
-    logFile << "Tabu Search completed after " << iter << " iterations." << std::endl;
-    logFile.close();
-    
-    auto now = chrono::steady_clock::now();
-    chrono::duration<double> elapsed = now - start_time;
-    cout << "🔁 Evaluations done: " << evaluation_count << endl;
-    cout << "⏱️  Time elapsed: " << elapsed.count() << " seconds" << endl;
-    cout << "🔥 Best cost found: " << best_cost << endl;
-    
-    return best;
+    return curr;
 }
+
+Solution GRASP(int max_iters, double alpha, int ls_no_improve) {
+    Solution best_sol;
+    double best_cost = std::numeric_limits<double>::infinity();
+
+    for (int i = 0; i < max_iters; ++i) {
+        // Phase 1: Construct
+        Solution sol = construct_grasp_solution(alpha);
+
+        // Phase 2: Improve
+        sol = grasp_local_search(sol, ls_no_improve);
+
+        double c = calculate_cost(sol);
+        if (c < best_cost) {
+            best_cost = c;
+            best_sol = sol;
+            std::cout << "GRASP iter " << i
+                      << " new best = " << best_cost << "\n";
+        }
+    }
+    return best_sol;
+}
+
 
 
 
@@ -856,22 +778,20 @@ int main(int argc, char* argv[]) {
 
     start_time = steady_clock::now();
 
-    // Tabu Search Parameters
-    int tabu_tenure = 50;          // Tabu list size or tenure (typical range: 5–100)
 
     // Choose the initialization method based on the input argument
     Solution initial;
-    if (init_method == "greedy") {
-        initial = generate_greedy_solution();
-    } else if (init_method == "random") {
-        initial = generate_random_solution();
-    } else {
-        cerr << "Invalid initialization method. Use 'greedy' or 'random'.\n";
-        return 1;
-    }
+    // if (init_method == "greedy") {
+    initial = construct_grasp_solution(0.2);
+    // } else if (init_method == "random") {
+    //     initial = generate_random_solution();
+    // } else {
+    //     cerr << "Invalid initialization method. Use 'greedy' or 'random'.\n";
+    //     return 1;
+    // }
     
     // Run Tabu Search
-    Solution best = tabu_search(initial,  tabu_tenure);
+    Solution best = GRASP(200,0.2,200);
 
     // Extract instance name from file path
     string instance_name = extract_instance_name(file_path);
