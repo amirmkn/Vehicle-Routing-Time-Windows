@@ -626,16 +626,20 @@ void print_solution(const Solution& sol, const std::string& filename) {
     out << "Total Cost: " << calculate_cost(sol) << "\n";
     out.close();
 }
-
+// Function to calculate the cost of a solution and increment the evaluation count
+double cost_and_count(const Solution& s) {
+    ++evaluation_count;
+    return calculate_cost(s);
+  }
 // ----- GRASP Implementation -----
 Solution grasp_local_search(Solution start, int max_no_improve) {
     Solution curr = start;
-    double curr_cost = calculate_cost(curr);
+    double curr_cost = cost_and_count(curr);
     int no_improve = 0;
 
     while (no_improve < max_no_improve) {
         Solution nb = generate_neighbor(curr);
-        double nb_cost = calculate_cost(nb);
+        double nb_cost = cost_and_count(nb);
         if (nb_cost < curr_cost - 1e-6) {
             curr = nb;
             curr_cost = nb_cost;
@@ -651,19 +655,24 @@ Solution GRASP(int max_iters, double alpha, int ls_no_improve) {
     Solution best_sol;
     double best_cost = std::numeric_limits<double>::infinity();
 
-    for (int i = 0; i < max_iters; ++i) {
-        // Phase 1: Construct
-        Solution sol = construct_grasp_solution(alpha);
+    while(!time_or_eval_limit_reached()) {
+        for (int i = 0; i < max_iters; ++i) {
+            if (time_or_eval_limit_reached()) break;    // extra guard
+            // Phase 1: Construct
+            Solution sol = construct_grasp_solution(alpha);
 
-        // Phase 2: Improve
-        sol = grasp_local_search(sol, ls_no_improve);
+            // Phase 2: Improve
+            sol = grasp_local_search(sol, ls_no_improve);
 
-        double c = calculate_cost(sol);
-        if (c < best_cost) {
-            best_cost = c;
-            best_sol = sol;
-            std::cout << "GRASP iter " << i
-                      << " new best = " << best_cost << "\n";
+            double c = cost_and_count(sol);
+            // evaluation_count++;
+            if (c < best_cost) {
+                best_cost = c;
+                best_sol = sol;
+                std::cout << "GRASP iter " << i
+                          << " new best = " << best_cost
+                          << "  (evals=" << evaluation_count << ")\n";
+            }
         }
     }
     return best_sol;
@@ -766,39 +775,41 @@ void read_data(const string& filename) {
         }
 }
 
+
 int main(int argc, char* argv[]) {
+    if (argc < 4) {
+        std::cerr << "Usage: " << argv[0] << " <input_file> <max_exec_seconds> <max_evaluations>\n";
+        return 1;
+    }
+
     string file_path = argv[1];  // File path from argument
     max_exec_seconds = atof(argv[2]);  // Max execution time in seconds
     max_evaluations = atoi(argv[3]);  // Max evaluations
-    string init_method = "greedy";  // Default initialization method
     
     srand(time(nullptr));
-
     read_data(file_path);
-
     start_time = steady_clock::now();
 
-
-    // Choose the initialization method based on the input argument
-    Solution initial;
-    // if (init_method == "greedy") {
-    initial = construct_grasp_solution(0.2);
-    // } else if (init_method == "random") {
-    //     initial = generate_random_solution();
-    // } else {
-    //     cerr << "Invalid initialization method. Use 'greedy' or 'random'.\n";
-    //     return 1;
-    // }
-    
-    // Run Tabu Search
+    // Run GRASP
     Solution best = GRASP(200,0.2,200);
 
+    // stop the clock
+    auto end_time = steady_clock::now();
+    double elapsed_s = duration_cast<duration<double>>(end_time - start_time).count();
+    
     // Extract instance name from file path
     string instance_name = extract_instance_name(file_path);
 
     // Write solution and checks to output file
     write_solution_to_file(best, instance_name);
     cout << validate_solution(best);
+
+    // REPORT the two budgets you actually used:
+    std::cout << "Total cost‑evaluations performed: " 
+            << evaluation_count << "\n";
+    std::cout << "Total elapsed time: " 
+            << elapsed_s << " seconds\n";
+
 
 
     return 0;

@@ -17,3 +17,6 @@
 .gitignore
 3.GRASP/gr
 3.GRASP/sa800_output.txt
+3.GRASP/*.txt
+
+3.GRASP/gr_v2
