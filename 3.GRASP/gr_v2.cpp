@@ -20,6 +20,8 @@
 using namespace std;
 using namespace std::chrono;
 std::ofstream log_file("local_search_log.txt");
+std::ofstream global_log("global_log.txt");
+
 
 // Global parameters (set from file)
 int DEPOT = 0; //Depot ID
@@ -65,6 +67,14 @@ bool can_insert_customer(const Route& route, int customer_id, int insert_pos) {
     temp.customers.insert(temp.customers.begin() + insert_pos, customer_id);
     return is_feasible(temp);
 }
+int count_active_routes(const Solution &sol) {
+    int active = 0;
+    for (const Route &r : sol) {
+        if (r.customers.size() > 2)  // beyond just DEPOT->DEPOT
+            ++active;
+    }
+    return active;
+}
 
 double rand01() {
     return static_cast<double>(rand()) / RAND_MAX;
@@ -76,12 +86,6 @@ double euclidean_distance(const Customer& a, const Customer& b) {
     return sqrt(dx * dx + dy * dy);
 }
 
-// A small exception to unwind out of deeply‐nested loops:
-struct StopException : public std::exception {
-    const char* what() const noexcept override {
-        return "Execution stopped due to time/evaluation limit";
-    }
-};
 
 // Create a new route with a given customer inserted.
 void create_route(Solution &sol, int customer_index) {
@@ -141,8 +145,64 @@ double get_time_at_last(const Route &route) {
     }
     return t;
 }
+
+void repair_solution(Solution &sol) {
+    // 1. Mark all customers as unserved
+    vector<bool> served(customers.size(), false);
+    served[DEPOT] = true;  // Depot is always served
+
+    for (const auto &route : sol) {
+        for (int c : route.customers) {
+            served[c] = true;
+        }
+    }
+
+    // 2. Build a list of unserved customers
+    vector<int> unserved;
+    for (int j = 1; j < customers.size(); ++j) {
+        if (!served[j])
+            unserved.push_back(j);
+    }
+
+    // 3. Try to insert unserved customers
+    for (int j : unserved) {
+        bool inserted = false;
+
+        for (Route &route : sol) {
+            if (route.total_demand + customers[j].demand > Q)
+                continue;
+
+            for (int p = 1; p < route.customers.size(); ++p) {
+                if (!can_insert_customer(route, j, p))
+                    continue;
+
+                double inc = insertion_cost(route, j, p, dist);
+                // You could apply some limit or selection here
+                route.customers.insert(route.customers.begin() + p, j);
+                route.total_demand += customers[j].demand;
+                inserted = true;
+                break;
+            }
+
+            if (inserted) break;
+        }
+
+        // 4. If not inserted, open a new route if possible
+        if (!inserted && sol.size() < M) {
+            Route new_route;
+            new_route.customers = { DEPOT, j, DEPOT };
+            new_route.total_demand = customers[j].demand;
+
+            if (is_feasible(new_route)) {
+                sol.push_back(new_route);
+            } else {
+                log_file << "[REPAIR] Could not repair customer " << j << "\n";
+            }
+        }
+    }
+}
 // Greedy construction based on sweep (angle) criteria.
-// α ∈ [0,1] controls greed vs. randomness
+//Ncand = 1 --> Greedy , Ncand = cand.size --> Randomized greedy
 Solution construct_rp_solution(int Ncand) {
     Solution sol;
     // 1) Open one empty route per vehicle
@@ -526,8 +586,14 @@ double cost_and_count(const Solution &s) {
 Solution descent_local_search(Solution sol) {
     // we assume first_improvement_local_search(sol) applies one move and returns true
     // if it found an improving, feasible move
+    int step = 0;
     while ( first_improvement_local_search(sol) &&
             !time_or_eval_limit_reached()) {
+                double cost = calculate_cost(sol);
+                int used_routes = count_active_routes(sol);
+                global_log << "[Step " << step << "] Eval #" << evaluation_count
+                           << ", Cost = " << cost
+                           << ", Routes Used = " << used_routes << "\n";
         // keep going until no move is found
     }
     return sol;
@@ -548,11 +614,23 @@ Solution GRASP(int max_iters,int Ncand)
 
                 // --- Phase 1: Construct initial solution with RP heuristic
                 Solution sol = construct_rp_solution(Ncand);
+                double cost = calculate_cost(sol);
+                int used_routes = count_active_routes(sol);
+                global_log << "[Initial] Eval #" << evaluation_count
+                           << ", Cost = " << cost
+                           << ", Routes Used = " << used_routes << "\n";
                 if (time_or_eval_limit_reached()) break;
 
                 // --- Phase 2: Descent local search using all 5 neighborhoods
                 sol = descent_local_search(sol);
-
+                cout << "entering the repair mode";
+                repair_solution(sol);
+                cost = calculate_cost(sol);
+                used_routes = count_active_routes(sol);
+                global_log << "[Repaired] Eval #" << evaluation_count
+                        << ", Cost = " << cost
+                        << ", Routes Used = " << used_routes << "\n";
+                
                 // --- Evaluate & update best
                 double c = cost_and_count(sol);
                 if (c < best_cost) {
@@ -681,7 +759,7 @@ int main(int argc, char* argv[]) {
     start_time = steady_clock::now();
 
     // Run GRASP
-    int Ncand = 5;
+    int Ncand = 1;
     int max_iters = 100;
 
     Solution best;

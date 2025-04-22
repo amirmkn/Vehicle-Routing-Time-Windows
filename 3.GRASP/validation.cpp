@@ -98,6 +98,14 @@ string validate_solution(const Solution &sol) {
         ss << "✅ All customers visited exactly once.\n";
     else
         ss << "❌ Some customers were missed or visited more than once.\n";
+    if (!all_served) {
+        ss << "  Customer visit counts:\n";
+        for (size_t i = 1; i < customers.size(); ++i) {
+            if (visit_count[i] != 1) {
+                ss << "    Customer " << i << ": visited " << visit_count[i] << " times.\n";
+            }
+        }
+    }
 
     if (demand_ok)
         ss << "✅ Route demands within vehicle capacity.\n";
