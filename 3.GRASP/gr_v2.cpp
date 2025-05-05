@@ -202,6 +202,94 @@ void repair_solution(Solution &sol) {
     }
 }
 // Greedy construction based on sweep (angle) criteria.
+Solution generate_greedy_solution(){
+    Solution sol;  // Initially empty: no routes
+    
+    // Mark depot as assigned.
+    std::vector<bool> assigned(customers.size(), false);
+    assigned[DEPOT] = true;
+
+    // Create a sorted list of customers (excluding the depot) by angle relative to the depot.
+    std::vector<int> sorted_customers;
+    for (int i = 1; i < customers.size(); ++i) {
+        sorted_customers.push_back(i);
+    }
+    
+    // Compute the polar angle using atan2. The depot is assumed to have index DEPOT.
+    std::sort(sorted_customers.begin(), sorted_customers.end(), [&](int a, int b) {
+        double angleA = std::atan2(customers[a].y - customers[DEPOT].y, customers[a].x - customers[DEPOT].x);
+        double angleB = std::atan2(customers[b].y - customers[DEPOT].y, customers[b].x - customers[DEPOT].x);
+        return angleA < angleB;
+    });
+
+    // Greedy insertion: Try to insert each customer from the sorted order into an existing route.
+    for (int i : sorted_customers) {
+        double best_incr = std::numeric_limits<double>::max();
+        int best_route = -1;
+        int best_pos = -1;
+        // Look for an existing route where the customer fits.
+        for (int r = 0; r < sol.size(); ++r) {
+            // Check if the vehicle has spare capacity for customer i.
+            if (sol[r].total_demand + customers[i].demand > Q)
+                continue;
+            // Test every potential insertion position within the route.
+            for (size_t pos = 1; pos < sol[r].customers.size(); ++pos) {
+                int prev = sol[r].customers[pos - 1];
+                int next = sol[r].customers[pos];
+                double cost_removed = dist[prev][next];
+                double cost_added = dist[prev][i] + dist[i][next];
+                double incr = cost_added - cost_removed;
+                if (incr < best_incr && can_insert_customer(sol[r], i, pos)) {
+                    best_incr = incr;
+                    best_route = r;
+                    best_pos = pos;
+                }
+            }
+        }
+
+        // If a feasible position was found, insert customer i.
+        if (best_route != -1) {
+            sol[best_route].customers.insert(sol[best_route].customers.begin() + best_pos, i);
+            sol[best_route].total_demand += customers[i].demand;
+            assigned[i] = true;
+        } else {
+            // Otherwise, if the customer itself fits in a new route, create a new route.
+            if (customers[i].demand <= Q) {
+                create_route(sol, i);
+                assigned[i] = true;
+            }
+        }
+    }
+
+    // In the rare instance that some customers remain unassigned, try to insert them at the end of any route.
+    for (int i = 1; i < customers.size(); ++i) {
+        if (!assigned[i]) {
+            for (int r = 0; r < sol.size(); ++r) {
+                int pos = sol[r].customers.size() - 1; // before final depot
+                if (sol[r].total_demand + customers[i].demand <= Q && can_insert_customer(sol[r], i, pos)) {
+                    sol[r].customers.insert(sol[r].customers.begin() + pos, i);
+                    sol[r].total_demand += customers[i].demand;
+                    assigned[i] = true;
+                    break;
+                }
+            }
+            // If still not assigned and the customer fits in a new route, do so.
+            if (!assigned[i] && customers[i].demand <= Q) {
+                create_route(sol, i);
+                assigned[i] = true;
+            }
+        }
+    }
+
+    // Filter out any empty routes (those with just the depots).
+    Solution sol_nonempty;
+    for (const auto &route : sol) {
+        if (route.customers.size() > 2) {  // more than just the two depot entries
+            sol_nonempty.push_back(route);
+        }
+    }
+    return sol_nonempty;
+}
 //Ncand = 1 --> Greedy , Ncand = cand.size --> Randomized greedy
 Solution construct_rp_solution(int Ncand) {
     Solution sol;
@@ -296,49 +384,49 @@ Solution construct_rp_solution(int Ncand) {
 
 
 // Function to generate the initial solution using a random approach
-// Solution generate_random_solution() {
-//     Solution sol;
-//     for (int i = 0; i < M; ++i) {
-//         sol.push_back({{DEPOT, DEPOT}, 0});
-//     }
+Solution generate_random_solution() {
+    Solution sol;
+    for (int i = 0; i < M; ++i) {
+        sol.push_back({{DEPOT, DEPOT}, 0});
+    }
 
-//     vector<bool> assigned(customers.size(), false);
-//     assigned[DEPOT] = true;
+    vector<bool> assigned(customers.size(), false);
+    assigned[DEPOT] = true;
 
-//     // Create a shuffled list of customer IDs (excluding depot)
-//     vector<int> cust_ids;
-//     for (int i = 1; i < customers.size(); ++i) {
-//         cust_ids.push_back(i);
-//     }
+    // Create a shuffled list of customer IDs (excluding depot)
+    vector<int> cust_ids;
+    for (int i = 1; i < customers.size(); ++i) {
+        cust_ids.push_back(i);
+    }
 
-//     std::random_device rd;
-//     std::mt19937 g(rd());
-//     std::shuffle(cust_ids.begin(), cust_ids.end(), g);
+    std::random_device rd;
+    std::mt19937 g(rd());
+    std::shuffle(cust_ids.begin(), cust_ids.end(), g);
 
-//     for (int cust : cust_ids) {
-//         // Try to assign the customer to a feasible route
-//         vector<int> route_order(M);
-//         std::iota(route_order.begin(), route_order.end(), 0);  // Fill with 0, 1, ..., M-1
-//         std::shuffle(route_order.begin(), route_order.end(), g);
+    for (int cust : cust_ids) {
+        // Try to assign the customer to a feasible route
+        vector<int> route_order(M);
+        std::iota(route_order.begin(), route_order.end(), 0);  // Fill with 0, 1, ..., M-1
+        std::shuffle(route_order.begin(), route_order.end(), g);
 
-//         bool inserted = false;
-//         for (int r : route_order) {
-//             for (size_t pos = 1; pos < sol[r].customers.size(); ++pos) {
-//                 if (sol[r].total_demand + customers[cust].demand <= Q &&
-//                     can_insert_customer(sol[r], cust, pos)) {
-//                     sol[r].customers.insert(sol[r].customers.begin() + pos, cust);
-//                     sol[r].total_demand += customers[cust].demand;
-//                     inserted = true;
-//                     break;
-//                 }
-//             }
-//             if (inserted) break;
-//         }
-//         assigned[cust] = inserted;
-//     }
+        bool inserted = false;
+        for (int r : route_order) {
+            for (size_t pos = 1; pos < sol[r].customers.size(); ++pos) {
+                if (sol[r].total_demand + customers[cust].demand <= Q &&
+                    can_insert_customer(sol[r], cust, pos)) {
+                    sol[r].customers.insert(sol[r].customers.begin() + pos, cust);
+                    sol[r].total_demand += customers[cust].demand;
+                    inserted = true;
+                    break;
+                }
+            }
+            if (inserted) break;
+        }
+        assigned[cust] = inserted;
+    }
 
-//     return sol;
-// }
+    return sol;
+}
 
 double calculate_cost(const Solution& sol) {
     int active_routes = 0;
@@ -613,7 +701,8 @@ Solution GRASP(int max_iters,int Ncand)
                 if (time_or_eval_limit_reached()) break;
 
                 // --- Phase 1: Construct initial solution with RP heuristic
-                Solution sol = construct_rp_solution(Ncand);
+                // Solution sol = construct_rp_solution(Ncand);
+                Solution sol = construct_rp_solution(Ncand); //generate_greedy_solution(); ,construct_rp_solution(Ncand); , generate_random_solution();
                 double cost = calculate_cost(sol);
                 int used_routes = count_active_routes(sol);
                 global_log << "[Initial] Eval #" << evaluation_count
@@ -759,7 +848,7 @@ int main(int argc, char* argv[]) {
     start_time = steady_clock::now();
 
     // Run GRASP
-    int Ncand = 1;
+    int Ncand = 5;
     int max_iters = 100;
 
     Solution best;
