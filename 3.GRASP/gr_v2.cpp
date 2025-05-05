@@ -583,13 +583,13 @@ bool two_opt_move(Route &route, int i, int j) {
 // Perform first-improvement local search with the five neighborhoods
 bool first_improvement_local_search(Solution &sol) {
     int R = sol.size();
-        // 1) Intra-route relocate
+        // // 1) Intra-route relocate
         
         for (int r = 0; r < R; ++r) {
             int n = sol[r].customers.size();
             for (int i = 1; i < n - 1; ++i)
                 for (int j = 1; j < n - 1; ++j) {
-                    log_file << "[Intra-relocate] route=" << r << " from=" << i << " to=" << j << "\n";
+                    // log_file << "[Intra-relocate] route=" << r << " from=" << i << " to=" << j << "\n";
                     if (relocate_intra_move(sol[r], i, j)) {
                         log_file << "---> Improved\n";
                         return true;
@@ -605,7 +605,7 @@ bool first_improvement_local_search(Solution &sol) {
                     int n2 = sol[r2].customers.size();
                     for (int i = 1; i < n1 - 1; ++i)
                         for (int j = 1; j < n2; ++j) {
-                            log_file << "[Inter-relocate] from route=" << r1 << " pos=" << i << " to route=" << r2 << " pos=" << j << "\n";
+                            // log_file << "[Inter-relocate] from route=" << r1 << " pos=" << i << " to route=" << r2 << " pos=" << j << "\n";
                             if (relocate_inter_move(sol, r1, i, r2, j)) {
                                 log_file << "---> Improved\n";
                                 return true;
@@ -620,7 +620,7 @@ bool first_improvement_local_search(Solution &sol) {
             int n = sol[r].customers.size();
             for (int i = 1; i < n - 1; ++i)
                 for (int j = i + 1; j < n - 1; ++j) {
-                    log_file << "[Intra-swap] route=" << r << " p1=" << i << " p2=" << j << "\n";
+                    // log_file << "[Intra-swap] route=" << r << " p1=" << i << " p2=" << j << "\n";
                     if (swap_intra_move(sol[r], i, j)) {
                         log_file << "---> Improved\n";
                         return true;
@@ -635,7 +635,7 @@ bool first_improvement_local_search(Solution &sol) {
                 int n2 = sol[r2].customers.size();
                 for (int i = 1; i < n1 - 1; ++i)
                     for (int j = 1; j < n2 - 1; ++j) {
-                        log_file << "[Inter-swap] r1=" << r1 << " p1=" << i << " r2=" << r2 << " p2=" << j << "\n";
+                        // log_file << "[Inter-swap] r1=" << r1 << " p1=" << i << " r2=" << r2 << " p2=" << j << "\n";
                         if (swap_inter_move(sol, r1, i, r2, j)) {
                             log_file << "---> Improved\n";
                             return true;
@@ -650,7 +650,7 @@ bool first_improvement_local_search(Solution &sol) {
             int n = sol[r].customers.size();
             for (int i = 1; i < n - 2; ++i)
                 for (int j = i + 1; j < n - 1; ++j) {
-                    log_file << "[2-opt] route=" << r << " i=" << i << " j=" << j << "\n";
+                    // log_file << "[2-opt] route=" << r << " i=" << i << " j=" << j << "\n";
                     if (two_opt_move(sol[r], i, j)) {
                         log_file << "---> Improved\n";
                         return true;
@@ -686,6 +686,38 @@ Solution descent_local_search(Solution sol) {
     }
     return sol;
 }
+//--- The way that there is a threshodld for improvements?---//
+
+// Solution descent_local_search(Solution sol) {
+//     int improvement_count = 0;
+//     const int improvement_threshold = 500; // Stop after 50 improvements
+//     int step = 0;
+
+//     while (!time_or_eval_limit_reached()) {
+//         bool improved = first_improvement_local_search(sol);
+//         if (!improved)
+//             break;
+
+//         ++improvement_count;
+//         ++step;
+
+//         double cost = calculate_cost(sol);
+//         int used_routes = count_active_routes(sol);
+
+//         global_log << "[Step " << step << "] Eval #" << evaluation_count
+//                    << ", Cost = " << cost
+//                    << ", Routes Used = " << used_routes << "\n";
+
+//         if (improvement_count >= improvement_threshold) {
+//             global_log << "[Step " << step << "] Reached improvement threshold. Ending local search.\n";
+//             break;
+//         }
+//     }
+
+//     return sol;
+// }
+
+
 
 
 // -----------------------------------------------------------------------------
@@ -702,7 +734,7 @@ Solution GRASP(int max_iters,int Ncand)
 
                 // --- Phase 1: Construct initial solution with RP heuristic
                 // Solution sol = construct_rp_solution(Ncand);
-                Solution sol = construct_rp_solution(Ncand); //generate_greedy_solution(); ,construct_rp_solution(Ncand); , generate_random_solution();
+                Solution sol = generate_greedy_solution(); //generate_greedy_solution(); ,construct_rp_solution(Ncand); , generate_random_solution();
                 double cost = calculate_cost(sol);
                 int used_routes = count_active_routes(sol);
                 global_log << "[Initial] Eval #" << evaluation_count
@@ -712,7 +744,7 @@ Solution GRASP(int max_iters,int Ncand)
 
                 // --- Phase 2: Descent local search using all 5 neighborhoods
                 sol = descent_local_search(sol);
-                cout << "entering the repair mode";
+                cout << "entering the repair mode \n";
                 repair_solution(sol);
                 cost = calculate_cost(sol);
                 used_routes = count_active_routes(sol);
