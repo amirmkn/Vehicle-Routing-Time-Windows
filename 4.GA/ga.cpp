@@ -312,6 +312,42 @@ vector<int> solomon_initialization(const vector<Customer>& customers, int vehicl
 }
 
 
+// ------- Create a mixed initial population: AMALGAM ----------
+using Population = std::vector<Individual>;
+
+// Create a mixed initial population:
+//  - `popSize` total individuals
+//  - `solomonCount` of them from the Solomon heuristic
+//  - the rest purely random
+Population initialize_population(int popSize,
+                                 int solomonCount,
+                                 mt19937& rng) {
+    Population pop;
+    pop.reserve(popSize);
+
+    int randomCount = popSize - solomonCount;
+
+    // 1) Solomon‐seeded individuals
+    for (int i = 0; i < solomonCount; ++i) {
+        Chromosome chrom = solomon_initialization(customers, vehicleCapacity);
+        Individual ind;
+        ind.chromosome = chrom;
+        ind.routes     = decode_chromosome(chrom);
+        ind.fitness    = evaluate(ind);
+        pop.push_back(ind);
+    }
+
+    // 2) Purely random individuals
+    for (int i = 0; i < randomCount; ++i) {
+        Individual ind = create_random_individual(rng);
+        pop.push_back(ind);
+    }
+
+    return pop;
+}
+
+
+
 
 Chromosome order_crossover(const Chromosome& A, const Chromosome& B, mt19937& rng) {
     int n = A.size();
@@ -461,7 +497,8 @@ int main(int argc, char* argv[]) {
     maxEvaluations = atoi(argv[3]);
 
     read_input(inputFile);
-    // --- after read_input(inputFile); ---
+
+    // Initialize distance and travel time matrices
     int n = customers.size();
     dist.resize(n, vector<double>(n));
     travel_time.resize(n, vector<double>(n));
@@ -469,35 +506,51 @@ int main(int argc, char* argv[]) {
         for (int j = 0; j < n; ++j) {
             double d = euclidean_distance(customers[i], customers[j]);
             dist[i][j] = d;
-            travel_time[i][j] = d;  // or if you have a separate travel_time, compute accordingly
+            travel_time[i][j] = d;
         }
 }
     startTime = clock();
+    // mt19937 rng(time(0));
+
+    // const int populationSize = 50;
+    // vector<Individual> population;
+    // for (int i = 0; i < populationSize; ++i) {
+    //     // Individual ind = create_random_individual(rng);
+
+    //     // 1) generate the flat-chromosome
+    //     Chromosome chrom = solomon_initialization(customers, Q);
+
+    //     // 2) build an Individual from it
+    //     Individual ind;
+    //     ind.chromosome = chrom;                          // store the permutation
+    //     ind.routes     = decode_chromosome(chrom);       // segment into routes
+    //     ind.fitness    = evaluate(ind);                  // compute fitness
+
+    //     population.push_back(ind);
+
     mt19937 rng(time(0));
+    int populationSize  = 1000; // size of the population
+    int solomonSeeds    = 250; // number of individuals from Solomon heuristic
+    auto population     = initialize_population(populationSize, solomonSeeds, rng);
 
-    const int populationSize = 50;
-    vector<Individual> population;
-    for (int i = 0; i < populationSize; ++i) {
-        // Individual ind = create_random_individual(rng);
-
-        // 1) generate the flat-chromosome
-        Chromosome chrom = solomon_initialization(customers, Q);
-
-        // 2) build an Individual from it
-        Individual ind;
-        ind.chromosome = chrom;                          // store the permutation
-        ind.routes     = decode_chromosome(chrom);       // segment into routes
-        ind.fitness    = evaluate(ind);                  // compute fitness
-
-population.push_back(ind);
-        population.push_back(ind);
-        if (ind.fitness < bestFitness) {
-            bestFitness = ind.fitness;
-            bestIndividual = ind;
-            logFile << "[Initial best] Distance: " << bestIndividual.fitness
-        << ", Routes: " << bestIndividual.routes.size() << "\n";
-        }
-    }
+    // find the initial best
+        bestFitness = numeric_limits<double>::max();
+        for (const auto &ind : population) {
+            if (ind.fitness < bestFitness) {
+                bestFitness    = ind.fitness;
+                bestIndividual = ind;
+                logFile << "[Initial best] Distance: " << bestIndividual.fitness
+                << ", Routes: " << bestIndividual.routes.size() << "\n";
+            }
+        }    
+    
+    // if (ind.fitness < bestFitness) {
+    //         bestFitness = ind.fitness;
+    //         bestIndividual = ind;
+    //         logFile << "[Initial best] Distance: " << bestIndividual.fitness
+    //     << ", Routes: " << bestIndividual.routes.size() << "\n";
+    //     }
+    
 
     while (!time_or_eval_exceeded()) {
         logFile << "\n--- New Generation ---\n";
