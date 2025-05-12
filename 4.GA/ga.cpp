@@ -220,48 +220,6 @@ Individual create_random_individual(mt19937& rng) {
 }
 
 
-// Individual create_random_individual(mt19937& rng) {
-//     vector<int> cust_ids;
-//     for (size_t i = 1; i < customers.size(); ++i)
-//         cust_ids.push_back(i);
-
-//     shuffle(cust_ids.begin(), cust_ids.end(), rng);
-
-//     Individual ind;
-//     vector<int> current_route;
-//     int current_load = 0;
-//     double departure_time = 0.0;
-//     int prev = 0; // start from depot
-
-//     for (int cid : cust_ids) {
-//         const Customer& cust = customers[cid];
-
-//         // Estimate arrival and departure times
-//         double travel = euclidean_distance(customers[prev], cust);
-//         double arrival = max(departure_time + travel, (double)cust.earliest);
-//         double leave = arrival + cust.service_time;
-//         int load_after = current_load + cust.demand;
-
-//         bool feasible = (arrival <= cust.latest) && (load_after <= vehicleCapacity);
-
-//         if (!feasible) {
-//             // Finish current route and start a new one
-//             if (!current_route.empty())
-//                 ind.routes.push_back(current_route);
-
-//             current_route.clear();
-//             current_route.push_back(cid);
-//             current_load = cust.demand;
-//             departure_time = max(euclidean_distance(customers[0], cust), (double)cust.earliest) + cust.service_time;
-//             prev = cid;
-//         } else {
-//             current_route.push_back(cid);
-//             departure_time = leave;
-//             current_load = load_after;
-//             prev = cid;
-//         }
-//     }
-
 //--------- SOLOMON INITIALIZATION -----------//
 vector<int> solomon_initialization(const vector<Customer>& customers, int vehicle_capacity) {
     vector<int> chromosome;
@@ -373,54 +331,43 @@ Chromosome order_crossover(const Chromosome& A, const Chromosome& B, mt19937& rn
     return child;
 }
 
-Individual crossover(const Individual& p1, const Individual& p2, mt19937& rng) {
-    Chromosome c = order_crossover(p1.chromosome, p2.chromosome, rng);
+Individual crossover(
+    const Individual& p1,
+    const Individual& p2,
+    std::mt19937& rng,
+    double cx_rate
+) {
+    std::uniform_real_distribution<> prob(0.0, 1.0);
+    Chromosome childChrom;
+
+    if (prob(rng) < cx_rate) {
+        // perform Order-Crossover
+        childChrom = order_crossover(p1.chromosome, p2.chromosome, rng);
+    } else {
+        // no crossover → copy parent1
+        childChrom = p1.chromosome;
+    }
+
     Individual child;
-    child.chromosome = c;
-    child.routes     = decode_chromosome(c);
+    child.chromosome = std::move(childChrom);
+    child.routes     = decode_chromosome(child.chromosome);
     child.fitness    = evaluate(child);
     return child;
 }
 
-// Individual crossover(const Individual& p1, const Individual& p2, mt19937& rng) {
-//     Individual child;
-//     unordered_set<int> used;
-//     for (const auto& route : p1.routes) {
-//         for (int cid : route) used.insert(cid);
-//         child.routes.push_back(route);
-//         if (rand() % 2 == 0) break;
-//     }
-//     for (const auto& route : p2.routes) {
-//         vector<int> newRoute;
-//         for (int cid : route) {
-//             if (!used.count(cid)) {
-//                 newRoute.push_back(cid);
-//                 used.insert(cid);
-//             }
-//         }
-//         if (!newRoute.empty()) child.routes.push_back(newRoute);
-//     }
-//     child.fitness = evaluate(child);
-//     return child;
-// }
+// -------------- Mutation ----------------
 
-// void mutate(Individual& ind, mt19937& rng) {
-//     uniform_int_distribution<> dist(0, ind.routes.size() - 1);
-//     int i = dist(rng);
-//     if (ind.routes[i].size() < 2) return;
-//     uniform_int_distribution<> dist2(0, ind.routes[i].size() - 1);
-//     int a = dist2(rng), b = dist2(rng);
-//     swap(ind.routes[i][a], ind.routes[i][b]);
-//     ind.fitness = evaluate(ind);
-// }
-
-void mutate(Individual& ind, mt19937& rng) {
-    uniform_real_distribution<> prob(0,1);
-    if (prob(rng) < 0.2) {
+void mutate(
+    Individual& ind,
+    std::mt19937& rng,
+    double mut_rate
+) {
+    std::uniform_real_distribution<> prob(0.0, 1.0);
+    if (prob(rng) < mut_rate) {
         int n = ind.chromosome.size();
-        uniform_int_distribution<> d(0, n-1);
+        std::uniform_int_distribution<> d(0, n - 1);
         int i = d(rng), j = d(rng);
-        swap(ind.chromosome[i], ind.chromosome[j]);
+        std::swap(ind.chromosome[i], ind.chromosome[j]);
         ind.routes  = decode_chromosome(ind.chromosome);
         ind.fitness = evaluate(ind);
     }
@@ -496,6 +443,8 @@ int main(int argc, char* argv[]) {
     maxTime = atoi(argv[2]);
     maxEvaluations = atoi(argv[3]);
 
+
+
     read_input(inputFile);
 
     // Initialize distance and travel time matrices
@@ -510,27 +459,12 @@ int main(int argc, char* argv[]) {
         }
 }
     startTime = clock();
-    // mt19937 rng(time(0));
-
-    // const int populationSize = 50;
-    // vector<Individual> population;
-    // for (int i = 0; i < populationSize; ++i) {
-    //     // Individual ind = create_random_individual(rng);
-
-    //     // 1) generate the flat-chromosome
-    //     Chromosome chrom = solomon_initialization(customers, Q);
-
-    //     // 2) build an Individual from it
-    //     Individual ind;
-    //     ind.chromosome = chrom;                          // store the permutation
-    //     ind.routes     = decode_chromosome(chrom);       // segment into routes
-    //     ind.fitness    = evaluate(ind);                  // compute fitness
-
-    //     population.push_back(ind);
 
     mt19937 rng(time(0));
     int populationSize  = 1000; // size of the population
     int solomonSeeds    = 250; // number of individuals from Solomon heuristic
+    double crossover_rate = 0.8;
+    double mutation_rate = 0.01;
     auto population     = initialize_population(populationSize, solomonSeeds, rng);
 
     // find the initial best
@@ -544,12 +478,6 @@ int main(int argc, char* argv[]) {
             }
         }    
     
-    // if (ind.fitness < bestFitness) {
-    //         bestFitness = ind.fitness;
-    //         bestIndividual = ind;
-    //         logFile << "[Initial best] Distance: " << bestIndividual.fitness
-    //     << ", Routes: " << bestIndividual.routes.size() << "\n";
-    //     }
     
 
     while (!time_or_eval_exceeded()) {
@@ -567,6 +495,7 @@ int main(int argc, char* argv[]) {
         logFile << "[Elitism] Preserved individual " << i + 1
                 << ", fitness: " << population[i].fitness << "\n";
     }
+    
     // Roulette Wheel Selection
 
     auto roulette_select = [&](mt19937& rng, const vector<Individual>& pop) {
@@ -613,9 +542,9 @@ int main(int argc, char* argv[]) {
             logFile << "Parent 2 fitness: " << p2.fitness << ", routes: " << p2.routes.size() << "\n";
 
 
-            Individual child = crossover(p1, p2, rng);
+            Individual child = crossover(p1, p2, rng, crossover_rate);
             if (rand() % 100 < 20) {
-                mutate(child, rng);
+                mutate(child, rng, mutation_rate);
                 logFile << "Mutation applied\n";
         } else {
     logFile << "Mutation skipped\n";
