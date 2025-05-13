@@ -41,7 +41,7 @@ clock_t startTime;
 
 
 
-// Convert Individual to Solution (vector<Route>)
+// Convert Individual to Solution (vector<Route>) in order to use the validation function we had
 Solution convert_to_solution(const Individual& ind) {
     Solution sol;
     for (const auto& vec : ind.routes) {
@@ -373,18 +373,46 @@ void mutate(
     }
 }
 
+// ------------------ INVERSION MUTATION ------------------------- //
+void inversion_mutation(Individual& ind, mt19937& rng, double mutation_rate) {
+    uniform_real_distribution<> prob(0.0, 1.0);
+    if (prob(rng) < mutation_rate) {
+        int n = ind.chromosome.size();
+        if (n < 2) return; // no meaningful inversion possible
+
+        uniform_int_distribution<> dist(0, n - 1);
+        int i = dist(rng);
+        int j = dist(rng);
+
+        if (i > j) swap(i, j);
+        if (i == j) return; // same point, skip
+
+        reverse(ind.chromosome.begin() + i, ind.chromosome.begin() + j + 1);
+
+        // Update the individual's routes and fitness
+        ind.routes = decode_chromosome(ind.chromosome);
+        ind.fitness = evaluate(ind);
+    }
+}
+
 
 void write_to_file(const Individual& ind, const string& inputFilePath) {
     ofstream out(get_output_filename(inputFilePath));
-    out << "Total Distance: " << ind.fitness << "\n";
-    out << "Vehicle Count: " << ind.routes.size() << "\n";
-    for (const auto& route : ind.routes) {
-        out << "0 ";
-        for (int cid : route) out << cid << " ";
-        out << "0\n";
+
+    for (size_t i = 0; i < ind.routes.size(); ++i) {
+        out << "Route " << (i + 1) << ": ";
+        for (int cid : ind.routes[i]) {
+            out << cid << " ";
+        }
+        out << "\n";
     }
+
+    out << "\nVehicles: " << ind.routes.size() << "\n";
+    out << "Distance: " << fixed << setprecision(2) << ind.fitness << "\n";
+
     out.close();
 }
+
 
 // ------------- INPUT READING ----------------- //
 // Read input from file
@@ -464,7 +492,16 @@ int main(int argc, char* argv[]) {
     int populationSize  = 1000; // size of the population
     int solomonSeeds    = 250; // number of individuals from Solomon heuristic
     double crossover_rate = 0.8;
-    double mutation_rate = 0.01;
+    double mutation_rate = 0.1;
+    double elite_rate     = 0.10;   // 10% of the population is preserved via elitism
+    double selection_rate = 0.90;   // 90% of parents come from roulette‐wheel
+    int eliteCount     = max(1, int(std::ceil(elite_rate * populationSize)));
+    double gen_span      = 1.0 - elite_rate;    // 90% replaced each gen
+    int    replaceCount  = int(std::round(gen_span * populationSize));
+
+    // std::mt19937 rng(std::random_device{}());
+    std::uniform_real_distribution<> uni(0.0, 1.0);
+
     auto population     = initialize_population(populationSize, solomonSeeds, rng);
 
     // find the initial best
@@ -488,7 +525,7 @@ int main(int argc, char* argv[]) {
         return a.fitness < b.fitness;  // lower fitness = better
     });
 
-    int eliteCount = std::max(1, populationSize / 10); // top 10%
+    // int eliteCount = std::max(1, populationSize / 10); // top 10%
     vector<Individual> newPop;
     for (int i = 0; i < eliteCount; ++i) {
         newPop.push_back(population[i]);
@@ -535,19 +572,34 @@ int main(int argc, char* argv[]) {
             
             // Individual p1 = tournament_select(3);
             // Individual p2 = tournament_select(3);
-            Individual p1 = roulette_select(rng, population);
-            Individual p2 = roulette_select(rng, population);
+            // Individual p1 = roulette_select(rng, population);
+            // Individual p2 = roulette_select(rng, population);
             // logFile << "[Selection] p1 fitness: " << p1.fitness << ", p2 fitness: " << p2.fitness << "\n";
+            Individual p1, p2;
+        // 90% roulette‐wheel, 10% uniform-from-elites
+            if (uni(rng) < selection_rate) {
+                p1 = roulette_select(rng, population);
+            } else {
+                std::uniform_int_distribution<> eDist(0, eliteCount - 1);
+                p1 = population[eDist(rng)];
+            }
+
+            if (uni(rng) < selection_rate) {
+                p2 = roulette_select(rng, population);
+            } else {
+                std::uniform_int_distribution<> eDist(0, eliteCount - 1);
+                p2 = population[eDist(rng)];
+            }
             logFile << "Parent 1 fitness: " << p1.fitness << ", routes: " << p1.routes.size() << "\n";
             logFile << "Parent 2 fitness: " << p2.fitness << ", routes: " << p2.routes.size() << "\n";
 
 
             Individual child = crossover(p1, p2, rng, crossover_rate);
             if (rand() % 100 < 20) {
-                mutate(child, rng, mutation_rate);
+                inversion_mutation(child, rng, mutation_rate);
                 logFile << "Mutation applied\n";
         } else {
-    logFile << "Mutation skipped\n";
+                logFile << "Mutation skipped\n";
 }
 /////// ----------- ADDED DETAILED LOG ----------------- ////////
 logFile << "Child fitness: " << child.fitness << ", routes: " << child.routes.size() << "\n";
