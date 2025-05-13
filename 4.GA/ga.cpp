@@ -206,6 +206,73 @@ void try_merge_routes(Individual& ind) {
 }
 
 
+// Compute the total distance of a depot-start/end route
+static double route_distance(const vector<int>& route) {
+    double d = 0;
+    int prev = DEPOT;
+    for (int cid : route) {
+        d += travel_time[prev][cid];
+        prev = cid;
+    }
+    d += travel_time[prev][DEPOT];
+    return d;
+}
+
+void rebalance_smallest_route(Individual& ind) {
+    if (ind.routes.size() < 2) return;
+
+    // 1) find index of the route with the fewest customers
+    size_t minIdx = 0;
+    for (size_t i = 1; i < ind.routes.size(); ++i) {
+        if (ind.routes[i].size() < ind.routes[minIdx].size()) {
+            minIdx = i;
+        }
+    }
+    auto smallRoute = ind.routes[minIdx];
+
+    // 2) try to insert each customer from smallRoute into another route
+    struct Insertion { size_t route; size_t pos; double delta; };
+    vector<vector<int>>& R = ind.routes;
+
+    for (int cid : smallRoute) {
+        Insertion best{0,0, std::numeric_limits<double>::infinity()};
+        bool found = false;
+
+        // attempt to insert `cid` into each other route at each position
+        for (size_t j = 0; j < R.size(); ++j) {
+            if (j == minIdx) continue;
+            auto& route = R[j];
+            // try all insertion points 0..route.size()
+            for (size_t k = 0; k <= route.size(); ++k) {
+                vector<int> trial = route;
+                trial.insert(trial.begin() + k, cid);
+                if (!is_feasible(trial)) continue;
+                // compute delta in distance
+                double before = route_distance(route);
+                double after  = route_distance(trial);
+                double delta  = after - before;
+                if (delta < best.delta) {
+                    best = {j, k, delta};
+                    found = true;
+                }
+            }
+        }
+
+        if (!found) {
+            // if any customer cannot be inserted, abort rebalance entirely
+            return;
+        }
+
+        // perform the best insertion
+        R[best.route].insert(R[best.route].begin() + best.pos, cid);
+    }
+
+    // 3) all customers moved successfully → remove the now-empty route
+    ind.routes.erase(ind.routes.begin() + minIdx);
+}
+
+
+
 // --------------- DECODER ------------------ //
 // Decode a chromosome into an Individual
 vector<vector<int>> decode_chromosome(const Chromosome& chromosome) {
@@ -711,12 +778,13 @@ int main(int argc, char* argv[]) {
              << ", vehicles used: " << bestIndividual.routes.size() << "\n";
     cout << "Total evaluations performed: " << evaluationCount << "\n";
     errorLog << "Total evaluations performed: " << evaluationCount << "\n";
-    errorLog << "[Before Merge] Route count: " << bestIndividual.routes.size() << "\n";
-    try_merge_routes(bestIndividual);
+    errorLog << "[Before rebalance] Route count: " << bestIndividual.routes.size() << "\n";
+    rebalance_smallest_route(bestIndividual);
     bestIndividual.routes = decode_chromosome(bestIndividual.chromosome);
-    errorLog << "[After Merge] Route count: " << bestIndividual.routes.size() << "\n";
+    errorLog << "[After rebalance] Route count: " << bestIndividual.routes.size() << "\n";
     errorLog.close();
     write_to_file(bestIndividual, inputFile);
+    cout << "Number of vehicles used: " << bestIndividual.routes.size() << "\n";
 
     Solution sol = convert_to_solution(bestIndividual);
     cout << validate_solution(sol);
