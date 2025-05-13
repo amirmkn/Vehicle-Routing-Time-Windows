@@ -66,6 +66,56 @@ string get_output_filename(const string& inputPath) {
     if (dot != string::npos) filename = filename.substr(0, dot);
     return filename + "_output.txt";
 }
+bool is_feasible(const vector<int>& route) {
+    double time = 0.0;
+    int load = 0;
+
+    int prev = DEPOT;  // Start at depot (usually index 0)
+
+    for (int cid : route) {
+        const Customer& curr = customers[cid];
+        time += travel_time[prev][cid];
+        time = max(time, static_cast<double>(curr.earliest));
+
+        if (time > curr.latest)
+            return false;
+
+        time += curr.service_time;
+        load += curr.demand;
+
+        if (load > Q)
+            return false;
+
+        prev = cid;
+    }
+
+    // Return to depot
+    time += travel_time[prev][DEPOT];
+    if (time > customers[DEPOT].latest)
+        return false;
+
+    return true;
+}
+
+// void try_merge_routes(Individual& ind) {
+//     for (size_t i = 0; i < ind.routes.size(); ++i) {
+//         for (size_t j = i + 1; j < ind.routes.size();) {
+//             vector<int> merged = ind.routes[i];
+//             merged.insert(merged.end(), ind.routes[j].begin(), ind.routes[j].end());
+
+//             if (is_feasible(merged)) {
+//                 ind.routes[i] = merged;
+//                 ind.routes.erase(ind.routes.begin() + j);
+//             } else {
+//                 ++j;
+//             }
+//         }
+//     }
+// }
+
+
+
+
 
 bool is_time_exceeded() {
     if (maxTime == 0) return false;
@@ -85,6 +135,76 @@ bool time_or_eval_exceeded() {
 double euclidean_distance(const Customer& a, const Customer& b) {
     return sqrt(pow(a.x - b.x, 2) + pow(a.y - b.y, 2));
 }
+
+// Attempt to merge route j into route i at the best insertion point.
+// Returns true if merge succeeded.
+bool try_merge_pair(vector<int>& base, vector<int>& addon) {
+    int n = base.size(), m = addon.size();
+    double bestDelta = numeric_limits<double>::infinity();
+    vector<int> bestMerged;
+
+    // Try inserting the entire 'addon' block at each position in 'base'
+    for (int pos = 0; pos <= n; ++pos) {
+        vector<int> merged;
+        merged.reserve(n + m);
+        merged.insert(merged.end(), base.begin(), base.begin() + pos);
+        merged.insert(merged.end(), addon.begin(), addon.end());
+        merged.insert(merged.end(), base.begin() + pos, base.end());
+
+        if (!is_feasible(merged)) continue;
+
+        // compute distance delta
+        auto distOf = [&](const vector<int>& route) {
+            double d = 0;
+            int prev = DEPOT;
+            for (int cid : route) {
+                d += travel_time[prev][cid];
+                prev = cid;
+            }
+            d += travel_time[prev][DEPOT];
+            return d;
+        };
+        double d0 = distOf(base), d1 = distOf(merged);
+        double delta = d1 - d0;
+        if (delta < bestDelta) {
+            bestDelta = delta;
+            bestMerged = std::move(merged);
+        }
+    }
+
+    if (bestDelta < numeric_limits<double>::infinity()) {
+        base = std::move(bestMerged);
+        return true;
+    }
+    return false;
+}
+
+// Aggressive merge: for every pair (i,j), try both directions,
+// pick any successful merge and restart scan.
+void try_merge_routes(Individual& ind) {
+    bool merged = true;
+    while (merged) {
+        if (time_or_eval_exceeded()) break;   // <-- time guard
+        merged = false;
+        int R = ind.routes.size();
+        for (int i = 0; i < R && !merged; ++i) {
+            for (int j = i+1; j < R; ++j) {
+                if (time_or_eval_exceeded()) break;
+                if (try_merge_pair(ind.routes[i], ind.routes[j])) {
+                    ind.routes.erase(ind.routes.begin()+j);
+                    merged = true;
+                    break;
+                }
+                if (try_merge_pair(ind.routes[j], ind.routes[i])) {
+                    ind.routes.erase(ind.routes.begin()+i);
+                    merged = true;
+                    break;
+                }
+            }
+        }
+    }
+}
+
 
 // --------------- DECODER ------------------ //
 // Decode a chromosome into an Individual
@@ -135,12 +255,18 @@ vector<vector<int>> decode_chromosome(const Chromosome& chromosome) {
 // Evaluate an Individual
 double evaluate(const Individual& ind) {
     evaluationCount++;
-        // 🚫 Hard reject if more than allowed vehicles
-        if (ind.routes.size() > M) {
-            logFile << "[Reject] Too many vehicles: " << ind.routes.size() << " > " << M << "\n";
-            return numeric_limits<double>::max();
-        }
     double totalDistance = 0.0;
+    double penalty = 0.0;
+
+    const double vehiclePenalty     = 10000.0;
+    const double capacityPenalty    = 100.0;
+    const double timeWindowPenalty  = 100.0;
+    const double depotLatePenalty   = 100.0;
+
+    if (ind.routes.size() > M) {
+        penalty += (ind.routes.size() - M) * vehiclePenalty;
+        logFile << "[Penalty] Extra vehicles used: " << ind.routes.size() - M << "\n";
+    }
 
     for (const auto& route : ind.routes) {
         if (route.empty()) continue;
@@ -149,59 +275,50 @@ double evaluate(const Individual& ind) {
         double arrival_time = 0.0;
         int load = 0;
         double route_distance = 0.0;
-
-        int prev = 0;  // start from depot
+        int prev = 0;
 
         for (int cid : route) {
             const Customer& curr = customers[cid];
-
-            // Travel from previous to current
             double travel = euclidean_distance(customers[prev], curr);
 
-            // Arrival at current = max(depart prev + travel, earliest)
             arrival_time = max(departure_time + travel, (double)curr.earliest);
             if (arrival_time > curr.latest) {
-                errorLog << "Time window violation at customer " << cid
-                        << ", arrival: " << arrival_time
-                        << ", window: [" << curr.earliest << ", " << curr.latest << "]\n";
-                return numeric_limits<double>::max();
+                double late = arrival_time - curr.latest;
+                penalty += late * timeWindowPenalty;
+                errorLog << "[TW Violation] Customer " << cid << ": late by " << late << "\n";
             }
 
-            // Departure from current = arrival + service
             departure_time = arrival_time + curr.service_time;
-
-            // Load update and capacity check
             load += curr.demand;
             if (load > vehicleCapacity) {
-                errorLog << "Capacity violation on route, load: " << load << " > " << vehicleCapacity << "\n";
-                return numeric_limits<double>::max();
+                penalty += (load - vehicleCapacity) * capacityPenalty;
+                errorLog << "[Capacity Violation] Load: " << load << ", cap: " << vehicleCapacity << "\n";
             }
 
             route_distance += travel;
             prev = cid;
         }
 
-        // Return to depot from last customer
+        // Return to depot
         double return_travel = euclidean_distance(customers[prev], customers[0]);
         departure_time += return_travel;
-
         if (departure_time > customers[0].latest) {
-            errorLog << "Depot return too late. Return time: " << departure_time
-                    << ", latest allowed: " << customers[0].latest << "\n";
-            return numeric_limits<double>::max();
+            double lateDepot = departure_time - customers[0].latest;
+            penalty += lateDepot * depotLatePenalty;
+            errorLog << "[Depot Late Return] Late by " << lateDepot << "\n";
         }
 
         route_distance += return_travel;
         totalDistance += route_distance;
-
-        double fitness = ind.routes.size() * 1e6 + totalDistance;  // prioritize fewer vehicles
-        logFile << "[Eval] Vehicles: " << ind.routes.size() << ", Distance: " << totalDistance
-                << ", Fitness: " << fitness << "\n";
     }
 
-    errorLog << "Evaluation " << evaluationCount << " succeeded. Total route distance: " << totalDistance << "\n";
-    return totalDistance;
+    double fitness = totalDistance + penalty;
+    logFile << "[Eval] Vehicles: " << ind.routes.size() << ", Distance: " << totalDistance
+            << ", Penalty: " << penalty << ", Fitness: " << fitness << "\n";
+
+    return fitness;
 }
+
 
 // ------------- RANDOM individual ----------------- //
 // Create a random individual by shuffling customer indices
@@ -463,15 +580,15 @@ void read_input(const string& filename) {
 
 int main(int argc, char* argv[]) {
     logFile << "Starting Genetic Algorithm...\n";
+    
     if (argc < 4) {
-        cerr << "Usage: " << argv[0] << " <input_file> <max_time> <max_evaluations>" << endl;
+        cerr << "Usage: " << argv[0] << " <input_file> <max_time> <max_evaluations>\n";
         return 1;
     }
+
     string inputFile = argv[1];
     maxTime = atoi(argv[2]);
     maxEvaluations = atoi(argv[3]);
-
-
 
     read_input(inputFile);
 
@@ -485,174 +602,125 @@ int main(int argc, char* argv[]) {
             dist[i][j] = d;
             travel_time[i][j] = d;
         }
-}
-    startTime = clock();
+    }
 
+    startTime = clock();
     mt19937 rng(time(0));
-    int populationSize  = 1000; // size of the population
-    int solomonSeeds    = 250; // number of individuals from Solomon heuristic
+
+    // GA parameters
+    int populationSize  = 1000;
+    int solomonSeeds    = 300;
     double crossover_rate = 0.8;
     double mutation_rate = 0.1;
-    double elite_rate     = 0.10;   // 10% of the population is preserved via elitism
-    double selection_rate = 0.90;   // 90% of parents come from roulette‐wheel
-    int eliteCount     = max(1, int(std::ceil(elite_rate * populationSize)));
-    double gen_span      = 1.0 - elite_rate;    // 90% replaced each gen
-    int    replaceCount  = int(std::round(gen_span * populationSize));
+    double elite_rate     = 0.10;
+    double selection_rate = 0.90;
+    int eliteCount        = max(1, int(ceil(elite_rate * populationSize)));
+    int replaceCount      = int(round((1.0 - elite_rate) * populationSize));
 
-    // std::mt19937 rng(std::random_device{}());
-    std::uniform_real_distribution<> uni(0.0, 1.0);
+    uniform_real_distribution<> uni(0.0, 1.0);
+    auto population = initialize_population(populationSize, solomonSeeds, rng);
 
-    auto population     = initialize_population(populationSize, solomonSeeds, rng);
-
-    // find the initial best
-        bestFitness = numeric_limits<double>::max();
-        for (const auto &ind : population) {
-            if (ind.fitness < bestFitness) {
-                bestFitness    = ind.fitness;
-                bestIndividual = ind;
-                logFile << "[Initial best] Distance: " << bestIndividual.fitness
-                << ", Routes: " << bestIndividual.routes.size() << "\n";
-            }
-        }    
-    
-    
+    bestFitness = numeric_limits<double>::max();
+    for (const auto& ind : population) {
+        if (ind.fitness < bestFitness) {
+            bestFitness = ind.fitness;
+            bestIndividual = ind;
+            logFile << "[Initial best] Distance: " << bestFitness
+                    << ", vehicles used: " << bestIndividual.routes.size() << "\n";
+        }
+    }
 
     while (!time_or_eval_exceeded()) {
         logFile << "\n--- New Generation ---\n";
-            
-        // Elitism: preserve top N best individuals
-    std::sort(population.begin(), population.end(), [](const Individual& a, const Individual& b) {
-        return a.fitness < b.fitness;  // lower fitness = better
-    });
 
-    // int eliteCount = std::max(1, populationSize / 10); // top 10%
-    vector<Individual> newPop;
-    for (int i = 0; i < eliteCount; ++i) {
-        newPop.push_back(population[i]);
-        logFile << "[Elitism] Preserved individual " << i + 1
-                << ", fitness: " << population[i].fitness << "\n";
-    }
-    
-    // Roulette Wheel Selection
+        // Sort population and preserve elites
+        sort(population.begin(), population.end(), [](const Individual& a, const Individual& b) {
+            return a.fitness < b.fitness;
+        });
 
-    auto roulette_select = [&](mt19937& rng, const vector<Individual>& pop) {
-        double fitness_sum = 0.0;
-        for (const auto& ind : pop) fitness_sum += 1.0 / (ind.fitness + 1e-6);  // inverse for minimization
-
-        double pick = uniform_real_distribution<>(0.0, fitness_sum)(rng);
-        double current = 0.0;
-
-        for (const auto& ind : pop) {
-            current += 1.0 / (ind.fitness + 1e-6);
-            if (current >= pick) return ind;
+        vector<Individual> newPop;
+        for (int i = 0; i < eliteCount; ++i) {
+            newPop.push_back(population[i]);
+            logFile << "[Elitism] Preserved individual " << i + 1
+                    << ", fitness: " << population[i].fitness << "\n";
         }
-        return pop.back();  // fallback
-};
 
+        // Selection helpers
+        auto roulette_select = [&](mt19937& rng, const vector<Individual>& pop) {
+            double fitness_sum = 0.0;
+            for (const auto& ind : pop) fitness_sum += 1.0 / (ind.fitness + 1e-6);
 
-        // vector<Individual> newPop;
+            double pick = uniform_real_distribution<>(0.0, fitness_sum)(rng);
+            double current = 0.0;
+
+            for (const auto& ind : pop) {
+                current += 1.0 / (ind.fitness + 1e-6);
+                if (current >= pick) return ind;
+            }
+            return pop.back();
+        };
+
         while (newPop.size() < populationSize) {
-            uniform_int_distribution<> dist(0, populationSize - 1);
-            // Individual p1 = population[dist(rng)];
-            // Individual p2 = population[dist(rng)];
-            
-            // Tournament selection
-            auto tournament_select = [&](int k) {
-                Individual best;
-                bool initialized = false;
-                for (int i = 0; i < k; ++i) {
-                    int idx = dist(rng);
-                    if (!initialized || population[idx].fitness < best.fitness) {
-                        best = population[idx];
-                        initialized = true;
-                    }
-                }
-                return best;
-            };
-            
-            // Individual p1 = tournament_select(3);
-            // Individual p2 = tournament_select(3);
-            // Individual p1 = roulette_select(rng, population);
-            // Individual p2 = roulette_select(rng, population);
-            // logFile << "[Selection] p1 fitness: " << p1.fitness << ", p2 fitness: " << p2.fitness << "\n";
             Individual p1, p2;
-        // 90% roulette‐wheel, 10% uniform-from-elites
-            if (uni(rng) < selection_rate) {
-                p1 = roulette_select(rng, population);
-            } else {
-                std::uniform_int_distribution<> eDist(0, eliteCount - 1);
-                p1 = population[eDist(rng)];
-            }
 
-            if (uni(rng) < selection_rate) {
+            if (uni(rng) < selection_rate)
+                p1 = roulette_select(rng, population);
+            else
+                p1 = population[uniform_int_distribution<>(0, eliteCount - 1)(rng)];
+
+            if (uni(rng) < selection_rate)
                 p2 = roulette_select(rng, population);
-            } else {
-                std::uniform_int_distribution<> eDist(0, eliteCount - 1);
-                p2 = population[eDist(rng)];
-            }
+            else
+                p2 = population[uniform_int_distribution<>(0, eliteCount - 1)(rng)];
+
             logFile << "Parent 1 fitness: " << p1.fitness << ", routes: " << p1.routes.size() << "\n";
             logFile << "Parent 2 fitness: " << p2.fitness << ", routes: " << p2.routes.size() << "\n";
 
-
             Individual child = crossover(p1, p2, rng, crossover_rate);
+            try_merge_routes(child);
+            logFile << "Routes merged after crossover.\n";
+
+
             if (rand() % 100 < 20) {
                 inversion_mutation(child, rng, mutation_rate);
+                try_merge_routes(child);
                 logFile << "Mutation applied\n";
-        } else {
+            } else {
                 logFile << "Mutation skipped\n";
-}
-/////// ----------- ADDED DETAILED LOG ----------------- ////////
-logFile << "Child fitness: " << child.fitness << ", routes: " << child.routes.size() << "\n";
+            }
 
-int route_idx = 1;
-for (const auto& route : child.routes) {
-    logFile << "  Route " << route_idx++ << ": 0 ";
-    for (int cid : route) logFile << cid << " ";
-    logFile << "0\n";
-
-    double time = 0.0, departure = 0.0;
-    int prev = 0;
-    for (int cid : route) {
-        const Customer& cust = customers[cid];
-        double travel = euclidean_distance(customers[prev], cust);
-        double arrival = max(departure + travel, (double)cust.earliest);
-        departure = arrival + cust.service_time;
-        logFile << "    Customer " << cid << ": arrival = " << arrival
-                << ", departure = " << departure << ", window = ["
-                << cust.earliest << ", " << cust.latest << "]\n";
-        prev = cid;
-    }
-    double return_time = departure + euclidean_distance(customers[prev], customers[0]);
-    logFile << "    Return to depot at time " << return_time
-            << ", latest allowed: " << customers[0].latest << "\n";
-}
+            logFile << "Child fitness: " << child.fitness
+                    << ", vehicles used: " << child.routes.size() << "\n";
 
             newPop.push_back(child);
+
             if (child.fitness < bestFitness) {
-                logFile << "Child became new best solution.\n";
-                logFile << "[New best] Distance improved: " << bestFitness
-                << " -> " << child.fitness
-                << ", Routes: " << bestIndividual.routes.size()
-                << " -> " << child.routes.size() << "\n";
                 bestFitness = child.fitness;
                 bestIndividual = child;
+
+                logFile << "[New Best] Distance: " << bestFitness
+                        << ", vehicles used: " << bestIndividual.routes.size() << "\n";
             }
         }
+
         population = newPop;
     }
-    
-    errorLog << "Best distance: " << bestIndividual.fitness
-    << ", vehicles used: " << bestIndividual.routes.size() << "\n";
-    errorLog.close();
-    // write_to_file(bestIndividual, inputFile);
-        // Ensure the best individual's routes are decoded
-        bestIndividual.routes = decode_chromosome(bestIndividual.chromosome);
 
-        // Write to file as before
-        write_to_file(bestIndividual, inputFile);
-    
-        // Build the Solution object and validate
-        Solution sol = convert_to_solution(bestIndividual);
-        cout << validate_solution(sol);
-        return 0;
-    }
+    // Final report
+    errorLog << "Best distance: " << bestIndividual.fitness
+             << ", vehicles used: " << bestIndividual.routes.size() << "\n";
+    cout << "Total evaluations performed: " << evaluationCount << "\n";
+    errorLog << "Total evaluations performed: " << evaluationCount << "\n";
+    errorLog << "[Before Merge] Route count: " << bestIndividual.routes.size() << "\n";
+    try_merge_routes(bestIndividual);
+    bestIndividual.routes = decode_chromosome(bestIndividual.chromosome);
+    errorLog << "[After Merge] Route count: " << bestIndividual.routes.size() << "\n";
+    errorLog.close();
+    write_to_file(bestIndividual, inputFile);
+
+    Solution sol = convert_to_solution(bestIndividual);
+    cout << validate_solution(sol);
+
+    return 0;
+}
+
