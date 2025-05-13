@@ -221,7 +221,7 @@ static double route_distance(const vector<int>& route) {
 void rebalance_smallest_route(Individual& ind) {
     if (ind.routes.size() < 2) return;
 
-    // 1) find index of the route with the fewest customers
+    // 1) Find index of the route with the fewest customers
     size_t minIdx = 0;
     for (size_t i = 1; i < ind.routes.size(); ++i) {
         if (ind.routes[i].size() < ind.routes[minIdx].size()) {
@@ -230,24 +230,31 @@ void rebalance_smallest_route(Individual& ind) {
     }
     auto smallRoute = ind.routes[minIdx];
 
-    // 2) try to insert each customer from smallRoute into another route
-    struct Insertion { size_t route; size_t pos; double delta; };
+    // 2) Try to insert each customer from smallRoute into another route
+    struct Insertion { size_t route, pos; double delta; };
     vector<vector<int>>& R = ind.routes;
 
     for (int cid : smallRoute) {
-        Insertion best{0,0, std::numeric_limits<double>::infinity()};
+        // Check time/eval limit before each customer
+        if (time_or_eval_exceeded()) return;
+
+        Insertion best{0, 0, std::numeric_limits<double>::infinity()};
         bool found = false;
 
-        // attempt to insert `cid` into each other route at each position
         for (size_t j = 0; j < R.size(); ++j) {
             if (j == minIdx) continue;
+
+            // Check again inside inner loop
+            if (time_or_eval_exceeded()) return;
+
             auto& route = R[j];
-            // try all insertion points 0..route.size()
             for (size_t k = 0; k <= route.size(); ++k) {
+                if (time_or_eval_exceeded()) return;
+
                 vector<int> trial = route;
                 trial.insert(trial.begin() + k, cid);
                 if (!is_feasible(trial)) continue;
-                // compute delta in distance
+
                 double before = route_distance(route);
                 double after  = route_distance(trial);
                 double delta  = after - before;
@@ -259,17 +266,18 @@ void rebalance_smallest_route(Individual& ind) {
         }
 
         if (!found) {
-            // if any customer cannot be inserted, abort rebalance entirely
+            // Abort if we can't reassign this customer
             return;
         }
 
-        // perform the best insertion
+        // Perform the best insertion
         R[best.route].insert(R[best.route].begin() + best.pos, cid);
     }
 
-    // 3) all customers moved successfully → remove the now-empty route
+    // 3) All customers moved successfully → remove the now-empty route
     ind.routes.erase(ind.routes.begin() + minIdx);
 }
+
 
 
 
