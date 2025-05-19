@@ -786,10 +786,10 @@ int main(int argc, char* argv[]) {
              << ", vehicles used: " << bestIndividual.routes.size() << "\n";
     cout << "Total evaluations performed: " << evaluationCount << "\n";
     errorLog << "Total evaluations performed: " << evaluationCount << "\n";
-    errorLog << "[Before rebalance] Route count: " << bestIndividual.routes.size() << "\n";
-    rebalance_smallest_route(bestIndividual);
-    bestIndividual.routes = decode_chromosome(bestIndividual.chromosome);
-    errorLog << "[After rebalance] Route count: " << bestIndividual.routes.size() << "\n";
+    // errorLog << "[Before rebalance] Route count: " << bestIndividual.routes.size() << "\n";
+    // try_merge_routes(bestIndividual);
+    // bestIndividual.routes = decode_chromosome(bestIndividual.chromosome);
+    // errorLog << "[After rebalance] Route count: " << bestIndividual.routes.size() << "\n";
     errorLog.close();
     write_to_file(bestIndividual, inputFile);
     cout << "Number of vehicles used: " << bestIndividual.routes.size() << "\n";
