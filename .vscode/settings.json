@@ -63,6 +63,10 @@
         "utility": "cpp",
         "format": "cpp",
         "thread": "cpp",
-        "fstream": "cpp"
+        "fstream": "cpp",
+        "__hash_table": "cpp",
+        "deque": "cpp",
+        "unordered_set": "cpp",
+        "forward_list": "cpp"
     }
 }

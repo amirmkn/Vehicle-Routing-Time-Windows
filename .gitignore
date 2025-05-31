@@ -27,3 +27,5 @@
 4.GA/validation.o
 4.GA/ga.o
 4.GA/Results
+5.ACO/*.txt
+5.ACO/aco
