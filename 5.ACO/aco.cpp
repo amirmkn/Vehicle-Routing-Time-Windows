@@ -19,11 +19,23 @@ double Q;                         // Vehicle capacity
 int M;                            // Max vehicles
 int maxEvaluations = 0;     // default maximum number of objective evaluations
 int maxTimeSeconds = 0;         // default maximum execution time in seconds
+int vehiclePenalty = 10000;
 vector<Customer> customers;
 vector<vector<double>> dist, travel_time;
 vector<Route> bestSolution;
 double bestDistance;
 int n = customers.size();
+
+struct SolutionScore {
+    int numVehicles;
+    double totalDistance;
+
+    bool operator<(const SolutionScore& other) const {
+        if (numVehicles != other.numVehicles)
+            return numVehicles < other.numVehicles;
+        return totalDistance < other.totalDistance;
+    }
+};
 
 string get_output_filename(const string& inputPath) {
     size_t slash = inputPath.find_last_of("/");
@@ -34,10 +46,10 @@ string get_output_filename(const string& inputPath) {
 }
 
 // ACO parameters
-int numAnts = 50;
+int numAnts = 10;
 int maxIterations = 1000;
-double alpha = 1.0;     // Influence of pheromone // the more, the more exploitation
-double beta = 2.0;      // Influence of heuristic (1/distance) //the more the greedier(shortest edges preferred)
+double alpha = 3.0;     // Influence of pheromone // the more, the more exploitation
+double beta = 1.0;      // Influence of heuristic (1/distance) //the more the greedier(shortest edges preferred)
 double rho = 0.2;       // Evaporation rate (the more the faster the evaporation gets, limits early convergence, we have more exploration)
 vector<vector<double>> pheromone;  // Pheromone matrix
 double a_factor   = 1.0;    // iteration‐best scale
@@ -176,7 +188,7 @@ double heuristic(int i, int j) {
     return (d > 0 ? 1.0 / d : 1e6);
 }
 
-double build_solution(int antId, vector<Route> &antRoutes) {
+SolutionScore build_solution(int antId, vector<Route> &antRoutes) {
     vector<bool> visited(customers.size(), false);
     visited[DEPOT] = true;
     antRoutes.clear();
@@ -243,7 +255,7 @@ double build_solution(int antId, vector<Route> &antRoutes) {
             totalDist += travel_time[r.customers[i - 1]][r.customers[i]];
         }
     }
-    return totalDist;
+    return { (int)antRoutes.size(), totalDist };
 }
 
 // void update_pheromone(const vector<vector<Route>> &allRoutes, const vector<double> &allDistances) {
@@ -302,13 +314,17 @@ void update_pheromone(const vector<vector<Route>> &allRoutes,
     }
 }
 
+// 
+
 void update_pheromone_ranked(
-    const vector<vector<Route>> &allAntRoutes,
-    const vector<double>        &allDistances,
-    double                       rho,
-    int                          sigma,
-    double                       a_factor,
-    double                       b_factor
+    const vector<vector<Route>>  &allAntRoutes,
+    const vector<SolutionScore>  &allScores,
+    double                        rho,
+    int                           sigma,
+    double                        a_factor,
+    double                        b_factor,
+    double                        vehiclePenalty,
+    SolutionScore                 bestScore
 ) {
     int n = customers.size();
 
@@ -317,60 +333,72 @@ void update_pheromone_ranked(
         for (int j = 0; j < n; ++j) {
             pheromone[i][j] *= (1.0 - rho);
             if (pheromone[i][j] < 1e-12) {
-                // (optional) floor pheromone to a tiny positive value
-                pheromone[i][j] = 1e-12;
+                pheromone[i][j] = 1e-12;  // floor to avoid zeros
             }
         }
     }
 
-    // 2) Build a list of ant indices 0..numAnts-1, then sort by distance:
-    int numAntsLocal = (int)allAntRoutes.size(); 
+    // 2) Build a list of ant indices 0..numAnts-1, then sort by lexicographic score:
+    int numAntsLocal = (int)allAntRoutes.size();
     vector<int> antIdx(numAntsLocal);
     iota(antIdx.begin(), antIdx.end(), 0);
+
+    // Sort so that the ant with fewer vehicles (then shorter distance) comes first
     sort(antIdx.begin(), antIdx.end(),
-         [&](int u, int v){
-             return allDistances[u] < allDistances[v];
+         [&](int u, int v) {
+             // Use the overloaded operator< on SolutionScore
+             return allScores[u] < allScores[v];
          });
 
-    // 3) Allow the top 'sigma' ants to deposit pheromone
-    //    (if sigma > numAntsLocal, just deposit for all ants present)
+    // 3) Let the top 'sigma' ants deposit pheromone
     int topCount = min(sigma, numAntsLocal);
     for (int rank = 0; rank < topCount; ++rank) {
-        int antId = antIdx[rank]; 
-        double Lmu = allDistances[antId];  // cost of the rank-th best ant
-        if (Lmu <= 0) continue;             // skip degenerate or zero‐cost
+        int antId = antIdx[rank];
+        const SolutionScore &sc = allScores[antId];
 
-        // Weight for this ant: (sigma - rank) / Lmu, scaled by a_factor
-        double depositMu = a_factor * ((sigma - rank) / Lmu);
+        // Compute a single‐scalar “fitness” so that fewer vehicles always wins.
+        // (You chose vehiclePenalty large enough so reducing 1 vehicle > any distance gain.)
+        double fitnessMu = sc.numVehicles * vehiclePenalty + sc.totalDistance;
+        if (fitnessMu <= 0) 
+            continue;   // skip degenerate cases (shouldn't really happen)
 
-        // For every edge (u→v) in that ant's route, add depositMu
+        // Weight for this ant: (sigma - rank) / fitnessMu, scaled by a_factor
+        double depositMu = a_factor * ((double)(sigma - rank) / fitnessMu);
+
+        // Now deposit on every edge in this ant's routes
         for (const Route &r : allAntRoutes[antId]) {
             for (size_t k = 1; k < r.customers.size(); ++k) {
                 int u = r.customers[k - 1];
                 int v = r.customers[k];
-                // safety check
-                if (u < 0 || u >= n || v < 0 || v >= n) continue;
+                if (u < 0 || u >= n || v < 0 || v >= n) 
+                    continue;
                 pheromone[u][v] += depositMu;
                 pheromone[v][u] += depositMu;
             }
         }
     }
 
-    // 4) Deposit for the global best‐so‐far (if it exists)
-    //    bestSolution is assumed to hold the best route set, bestDistance its cost
-    if (!bestSolution.empty() && bestDistance > 0) {
-        double depositStar = b_factor * (1.0 / bestDistance);
-        for (const Route &r : bestSolution) {
-            for (size_t k = 1; k < r.customers.size(); ++k) {
-                int u = r.customers[k - 1];
-                int v = r.customers[k];
-                if (u < 0 || u >= n || v < 0 || v >= n) continue;
-                pheromone[u][v] += depositStar;
-                pheromone[v][u] += depositStar;
+    // 4) Deposit for the global best‐so‐far solution (lexicographic best)
+    if (!bestSolution.empty()) {
+        // Compute the global best's fitness
+        SolutionScore &g = bestScore;
+        double bestFitness = g.numVehicles * vehiclePenalty + g.totalDistance;
+        if (bestFitness > 0) {
+            double depositStar = b_factor * (1.0 / bestFitness);
+            for (const Route &r : bestSolution) {
+                for (size_t k = 1; k < r.customers.size(); ++k) {
+                    int u = r.customers[k - 1];
+                    int v = r.customers[k];
+                    if (u < 0 || u >= n || v < 0 || v >= n) 
+                        continue;
+                    pheromone[u][v] += depositStar;
+                    pheromone[v][u] += depositStar;
+                }
             }
         }
     }
 }
+
 void reset_pheromone(double baseValue = 1.0) {
     // Simply set every pheromone[i][j] = baseValue.
     // If you want a slight bias on the global best edges, you can do that after.
@@ -402,7 +430,7 @@ int main(int argc, char* argv[]) {
 
     read_input(inputFile);
     
-    int    resetThreshold= 20;    // If no improvement in 20 iterations → reset
+    int    resetThreshold= 50;    // If no improvement in 20 iterations → reset
 
     int n = customers.size();
     dist.resize(n, vector<double>(n));
@@ -416,15 +444,23 @@ int main(int argc, char* argv[]) {
 
     // 1) Running NN first, so we have a baseline solution
     vector<Route> nnRoutes;
-    double nnCost = nearest_neighbor_solution(nnRoutes);
+    double nnDist = nearest_neighbor_solution(nnRoutes);
+    int nnVehicles = (int)nnRoutes.size();
+    SolutionScore bestScore = { nnVehicles, nnDist };
+    vector<Route>  bestSolution = nnRoutes;
 
     // Printing the NN baseline:
-    cout << "NN heuristic cost = " << nnCost
+    cout << "NN heuristic distance = " << nnDist
          << "  with " << nnRoutes.size() << " vehicles\n";
     
     // 2) Initialize ACO’s bestDistance to the NN cost (so ACO only tries to beat it)
-    bestDistance = nnCost;
+    bestScore.numVehicles = nnRoutes.size();
+    bestScore.totalDistance = nnDist;
     bestSolution = nnRoutes;
+
+    // // No NN used — start with worst possible score
+    // SolutionScore bestScore = { INT_MAX, numeric_limits<double>::infinity() };
+    // vector<Route> bestSolution;
 
 
 
@@ -446,7 +482,7 @@ int main(int argc, char* argv[]) {
     // srand(42); // For reproducibility
 
     vector<vector<Route>> allAntRoutes(numAnts);
-    vector<double> allDistances(numAnts);
+    vector<SolutionScore> allScores(numAnts);
     // vector<Route> bestSolution;
     // double bestDistance = numeric_limits<double>::infinity();
 
@@ -456,12 +492,13 @@ int main(int argc, char* argv[]) {
 
     int evals = 0;
     auto startTime = chrono::steady_clock::now();
-
+    
+    int bestAntId = -1;
     for (int iter = 0; iter < maxIterations; ++iter) {
         for (int k = 0; k < numAnts; ++k) {
             if (evals >= maxEvaluations && maxEvaluations > 0) break;
 
-            allDistances[k] = build_solution(k, allAntRoutes[k]);
+            allScores[k] = build_solution(k, allAntRoutes[k]);
                 ++evals;
 
             // if (allDistances[k] < bestDistance) {
@@ -469,9 +506,10 @@ int main(int argc, char* argv[]) {
             //     bestSolution = allAntRoutes[k];
             // }
         // update best if this ant actually built something
-        if (!allAntRoutes[k].empty() && allDistances[k] < bestDistance) {
-                bestDistance = allDistances[k];
+        if (!allAntRoutes[k].empty() && allScores[k] < bestScore) {
+                bestScore = allScores[k];
                 bestSolution = allAntRoutes[k];
+                bestAntId = k;
             }
         
                 // b) Check if global best improved
@@ -516,33 +554,27 @@ int main(int argc, char* argv[]) {
                 << " reached.\n";
             break;
     }
-        // auto now = chrono::steady_clock::now();
-        // auto elapsedSec = chrono::duration_cast<chrono::seconds>(now - startTime).count();
-        // if (evals >= maxEvaluations || elapsedSec >= maxTimeSeconds) {
-        //     cout << "Stopping early: " 
-        //          << (evals >= maxEvaluations ? "max evaluations" : "time limit")
-        //          << " reached.\n";
-        //     break;
-        // }
-
         // update_pheromone(allAntRoutes, allDistances);
         update_pheromone_ranked(
             allAntRoutes,
-            allDistances,
+            allScores,
             rho,
             sigma,
             a_factor,
-            b_factor
-);        
-        cout << "Iter " << iter + 1 << " | Best = " << bestDistance 
+            b_factor,
+            vehiclePenalty,
+            bestScore
+        );        
+        cout << "Iter " << iter + 1 << " | Best Distance = " << bestScore.totalDistance
+             <<"| Best Vehicles = " << bestScore.numVehicles 
              << " | NoImprove = " << noImproveCount 
              << " | Evals = " << evals 
              << " | Time = " << elapsedSec << "s\n";
     }
 
 
-cerr << "DEBUG: bestSolution has " << bestSolution.size() << " routes; bestDistance = "
-     << bestDistance << "\n";
+cerr << "DEBUG: bestSolution has " << bestScore.numVehicles << " routes; bestDistance = "
+     << bestScore.totalDistance << "\n";
 // Write result to file
 ofstream out(get_output_filename(inputFile));
 out << "Number of vehicles used: " << bestSolution.size() << "\n";
@@ -556,10 +588,15 @@ for (size_t i = 0; i < bestSolution.size(); ++i) {
 }
 out.close();
 
+
+cout << "Best solution found by Ant #" << bestAntId
+     << " | Vehicles = " << bestScore.numVehicles
+     << " | Distance = " << bestScore.totalDistance << "\n";
+
 // Print summary to console
-cout << "\n✅ Final Solution Summary:\n";
-cout << "  Vehicles used: " << bestSolution.size() << "\n";
-cout << "  Total distance: " << bestDistance << "\n\n";
+// cout << "\n✅ Final Solution Summary:\n";
+// cout << "  Vehicles used: " << bestScore.numVehicles << "\n";
+// cout << "  Total distance: " << bestScore.totalDistance << "\n\n";
 
 // Validate
 Solution sol = bestSolution;
