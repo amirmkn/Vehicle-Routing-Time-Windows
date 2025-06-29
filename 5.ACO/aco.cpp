@@ -24,7 +24,6 @@ vector<Customer> customers;
 vector<vector<double>> dist, travel_time;
 vector<Route> bestSolution;
 double bestDistance;
-int n = customers.size();
 
 struct SolutionScore {
     int numVehicles;
@@ -46,10 +45,14 @@ string get_output_filename(const string& inputPath) {
 }
 
 // ACO parameters
+int resetCountdown   = 2;    // how many iterations remain with β reduced
+const int RESET_ITER =  20;   // number of iterations to keep β low after a reset
 int numAnts = 10;
 int maxIterations = 1000;
 double alpha = 3.0;     // Influence of pheromone // the more, the more exploitation
 double beta = 1.0;      // Influence of heuristic (1/distance) //the more the greedier(shortest edges preferred)
+const double BETA_LOW =  0.1;  // reduced β during reset-mode
+const double BETA_High =  1.0;  // restored β after reset-mode
 double rho = 0.2;       // Evaporation rate (the more the faster the evaporation gets, limits early convergence, we have more exploration)
 vector<vector<double>> pheromone;  // Pheromone matrix
 double a_factor   = 1.0;    // iteration‐best scale
@@ -278,43 +281,42 @@ SolutionScore build_solution(int antId, vector<Route> &antRoutes) {
 //     }
 // }
 
-void update_pheromone(const vector<vector<Route>> &allRoutes,
-                      const vector<double>            &allDistances) {
-    // 1) Evaporate
-    for (int i = 0; i < n; ++i)
-      for (int j = 0; j < n; ++j)
-        pheromone[i][j] *= (1.0 - rho);
+// void update_pheromone(const vector<vector<Route>> &allRoutes,
+//                       const vector<double>            &allDistances) {
+//     // 1) Evaporate
+//     for (int i = 0; i < n; ++i)
+//       for (int j = 0; j < n; ++j)
+//         pheromone[i][j] *= (1.0 - rho);
 
-    // 2) Deposit for iteration‐best (even if worse than global best)
-    int iterBest = min_element(allDistances.begin(), allDistances.end()) - allDistances.begin();
-    double iterDelta = 1.0 / allDistances[iterBest];
-    for (auto &r : allRoutes[iterBest]) {
-      for (size_t k = 1; k < r.customers.size(); ++k) {
-        int u = r.customers[k - 1];
-        int v = r.customers[k];
-        pheromone[u][v] += iterDelta;
-        pheromone[v][u] += iterDelta;
-      }
-    }
+//     // 2) Deposit for iteration‐best (even if worse than global best)
+//     int iterBest = min_element(allDistances.begin(), allDistances.end()) - allDistances.begin();
+//     double iterDelta = 1.0 / allDistances[iterBest];
+//     for (auto &r : allRoutes[iterBest]) {
+//       for (size_t k = 1; k < r.customers.size(); ++k) {
+//         int u = r.customers[k - 1];
+//         int v = r.customers[k];
+//         pheromone[u][v] += iterDelta;
+//         pheromone[v][u] += iterDelta;
+//       }
+//     }
 
-    // 3) If this iteration improved upon the _global_ best, add an elitist bonus
-    if (allDistances[iterBest] < bestDistance) {
-      bestDistance = allDistances[iterBest];
-      bestSolution = allRoutes[iterBest];
-      double eliteDelta = 2.0 / bestDistance;  
-      // (a slightly larger deposit for the global best)
-      for (auto &r : bestSolution) {
-        for (size_t k = 1; k < r.customers.size(); ++k) {
-          int u = r.customers[k - 1];
-          int v = r.customers[k];
-          pheromone[u][v] += eliteDelta;
-          pheromone[v][u] += eliteDelta;
-        }
-      }
-    }
-}
+//     // 3) If this iteration improved upon the _global_ best, add an elitist bonus
+//     if (allDistances[iterBest] < bestDistance) {
+//       bestDistance = allDistances[iterBest];
+//       bestSolution = allRoutes[iterBest];
+//       double eliteDelta = 2.0 / bestDistance;  
+//       // (a slightly larger deposit for the global best)
+//       for (auto &r : bestSolution) {
+//         for (size_t k = 1; k < r.customers.size(); ++k) {
+//           int u = r.customers[k - 1];
+//           int v = r.customers[k];
+//           pheromone[u][v] += eliteDelta;
+//           pheromone[v][u] += eliteDelta;
+//         }
+//       }
+//     }
+// }
 
-// 
 
 void update_pheromone_ranked(
     const vector<vector<Route>>  &allAntRoutes,
@@ -400,6 +402,7 @@ void update_pheromone_ranked(
 }
 
 void reset_pheromone(double baseValue = 1.0) {
+    int n = customers.size();
     // Simply set every pheromone[i][j] = baseValue.
     // If you want a slight bias on the global best edges, you can do that after.
     for (int i = 0; i < n; ++i) {
@@ -407,16 +410,6 @@ void reset_pheromone(double baseValue = 1.0) {
             pheromone[i][j] = baseValue;
         }
     }
-    // (Optional) If you want to re‐seed pheromone on bestSolution’s edges:
-    //
-    // double bonus = 1.0 / bestDistance;  
-    // for (auto &r : bestSolution) {
-    //   for (size_t k = 1; k < r.customers.size(); ++k) {
-    //       int u = r.customers[k - 1], v = r.customers[k];
-    //       pheromone[u][v] += bonus;
-    //       pheromone[v][u] += bonus;
-    //   }
-    // }
 }
 int main(int argc, char* argv[]) {
     if (argc < 4) {
@@ -447,7 +440,8 @@ int main(int argc, char* argv[]) {
     double nnDist = nearest_neighbor_solution(nnRoutes);
     int nnVehicles = (int)nnRoutes.size();
     SolutionScore bestScore = { nnVehicles, nnDist };
-    vector<Route>  bestSolution = nnRoutes;
+    bestSolution = nnRoutes;
+    bestDistance = nnDist;
 
     // Printing the NN baseline:
     cout << "NN heuristic distance = " << nnDist
@@ -458,7 +452,7 @@ int main(int argc, char* argv[]) {
     bestScore.totalDistance = nnDist;
     bestSolution = nnRoutes;
 
-    // // No NN used — start with worst possible score
+    // No NN used — start with worst possible score
     // SolutionScore bestScore = { INT_MAX, numeric_limits<double>::infinity() };
     // vector<Route> bestSolution;
 
@@ -467,17 +461,6 @@ int main(int argc, char* argv[]) {
 
     init_pheromone();
 
-    //     // 3) (Optional) Initialize pheromone on NN edges to be slightly higher than 1.0
-    // // For every route in nnRoutes, deposit some initial pheromone (e.g. 1.0 + 1/nnCost):
-    // double initDelta = 1.0 / nnCost;
-    // for (auto &r : nnRoutes) {
-    //     for (size_t i = 1; i < r.customers.size(); ++i) {
-    //         int u = r.customers[i-1];
-    //         int v = r.customers[i];
-    //         pheromone[u][v] += initDelta;
-    //         pheromone[v][u] += initDelta;
-    //     }
-    // }
     srand(time(0));
     // srand(42); // For reproducibility
 
@@ -501,10 +484,6 @@ int main(int argc, char* argv[]) {
             allScores[k] = build_solution(k, allAntRoutes[k]);
                 ++evals;
 
-            // if (allDistances[k] < bestDistance) {
-            //     bestDistance = allDistances[k];
-            //     bestSolution = allAntRoutes[k];
-            // }
         // update best if this ant actually built something
         if (!allAntRoutes[k].empty() && allScores[k] < bestScore) {
                 bestScore = allScores[k];
@@ -523,12 +502,25 @@ int main(int argc, char* argv[]) {
         }
 
         // c) If no improvement for resetThreshold consecutive iters → reset
-        if (noImproveCount >= resetThreshold) {
-            cout << "→ No improvement for " << resetThreshold 
-                 << " iters; resetting pheromone to uniform.\n";
-            reset_pheromone(1.0);
-            noImproveCount = 0;      // start counting afresh
-        }
+        // if (noImproveCount >= resetThreshold) {
+        //     cout << "→ No improvement for " << resetThreshold 
+        //          << " iters; resetting pheromone to uniform.\n";
+        //     reset_pheromone(1.0);
+        //     noImproveCount = 0;      // start counting afresh
+        //     resetCountdown = RESET_ITER;   // enter reset-mode for the next few iterations
+        // }
+        //  (d) Adjust β if we’re in reset-mode
+        // if (resetCountdown > 0) {
+        //     cout << "→ Reset-mode active: β = " << BETA_LOW << "\n";
+        //     beta = BETA_LOW;
+        //     resetCountdown--;
+        //     if (resetCountdown == 0) {
+        //         cout << "→ Exiting reset-mode, restoring β = " << BETA_High << "\n";
+        //         beta = BETA_High;
+        //     }
+        // } else {
+        //     beta = BETA_High;
+        // }
 
 
             
@@ -553,7 +545,7 @@ int main(int argc, char* argv[]) {
                 << (stopByEvals ? "max evaluations" : "time limit")
                 << " reached.\n";
             break;
-    }
+        }
         // update_pheromone(allAntRoutes, allDistances);
         update_pheromone_ranked(
             allAntRoutes,
@@ -577,15 +569,17 @@ cerr << "DEBUG: bestSolution has " << bestScore.numVehicles << " routes; bestDis
      << bestScore.totalDistance << "\n";
 // Write result to file
 ofstream out(get_output_filename(inputFile));
-out << "Number of vehicles used: " << bestSolution.size() << "\n";
-out << "Total distance: " << bestDistance << "\n";
-out << "Routes:\n";
+
 for (size_t i = 0; i < bestSolution.size(); ++i) {
     out << "  Route " << i+1 << ": ";
-    for (int cid : bestSolution[i].customers)
-        out << cid << " ";
+    const vector<int>& custs = bestSolution[i].customers;
+    for (size_t j= 1 ; j + 1 < custs.size(); ++j){
+        out << custs[j] << " ";
+}
     out << "(demand = " << bestSolution[i].total_demand << ")\n";
 }
+out << "Vehicles: " << bestScore.numVehicles << "\n";
+out << "Distance: " << bestScore.totalDistance << "\n";
 out.close();
 
 

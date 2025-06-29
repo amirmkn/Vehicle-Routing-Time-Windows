@@ -29,3 +29,10 @@
 4.GA/Results
 5.ACO/*.txt
 5.ACO/aco
+5.ACO/aco.dSYM/Contents/Resources/DWARF/aco
+5.ACO/aco.dSYM/Contents/Resources/Relocations/x86_64/aco.yml
+.gitignore
+5.ACO/results
+.gitignore
+.gitignore
+5.ACO/Makefile
