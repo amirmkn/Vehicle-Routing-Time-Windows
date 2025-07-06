@@ -1,210 +1,241 @@
 #include <iostream>
 #include <vector>
-#include <fstream>
 #include <cmath>
-#include <limits>
 #include <algorithm>
-#include <random>
+#include <fstream>
+#include <sstream>
 #include <chrono>
+#include <random>
+#include <limits>
+#include <numeric>
+#include "validation.h"
 
 using namespace std;
-using namespace chrono;
 
-struct Customer {
-    int id;
-    double x, y, demand;
-    double ready_time, due_date, service_time;
-};
-
-struct Particle {
-    vector<int> position;     // permutation of customers
-    vector<int> best_position;
-    double fitness = 1e9;
-    double best_fitness = 1e9;
-    double velocity = 0; // PSO velocity is abstract for discrete problems
-};
-
+// Problem parameters
+typedef vector<int> Sequence;
+int DEPOT = 0;
+double Q;  // capacity
+int M;     // max vehicles
 vector<Customer> customers;
-int vehicle_capacity, num_vehicles;
-int depot_id = 0;
-int max_evaluations = 10000;
-int evaluation_count = 0;
-int swarm_size = 50;
-int max_iter = 1000;
+vector<vector<double>> dist, travel_time;
 
-random_device rd;
-mt19937 rng(rd());
+typedef std::chrono::steady_clock Clock;
 
-double distance(const Customer &a, const Customer &b) {
-    return hypot(a.x - b.x, a.y - b.y);
-}
-
-vector<vector<double>> dist_matrix;
-
-void compute_distance_matrix() {
-    int n = customers.size();
-    dist_matrix.assign(n, vector<double>(n, 0.0));
-    for (int i = 0; i < n; ++i)
-        for (int j = 0; j < n; ++j)
-            dist_matrix[i][j] = distance(customers[i], customers[j]);
-}
-
-double evaluate(const vector<int>& route) {
-    ++evaluation_count;
-
-    double total_cost = 0;
-    int load = 0;
-    double time = 0;
-    int vehicle_count = 1;
-
-    int prev = depot_id;
-
-    for (int i = 0; i < route.size(); ++i) {
-        int curr = route[i];
-        const Customer &c = customers[curr];
-
-        if (load + c.demand > vehicle_capacity || time + dist_matrix[prev][curr] > c.due_date) {
-            total_cost += dist_matrix[prev][depot_id]; // return to depot
-            vehicle_count++;
-            load = 0;
-            time = 0;
-            prev = depot_id;
-        }
-
-        time += dist_matrix[prev][curr];
-        if (time < c.ready_time) time = c.ready_time;
-        if (time > c.due_date) return 1e9;
-
-        time += c.service_time;
-        load += c.demand;
-        total_cost += dist_matrix[prev][curr];
-        prev = curr;
+struct SolutionScore {
+    int vehicles;
+    double distance;
+    double penalized;
+    bool operator<(const SolutionScore& o) const {
+        if (vehicles != o.vehicles) return vehicles < o.vehicles;
+        return distance < o.distance;
     }
+};
 
-    total_cost += dist_matrix[prev][depot_id]; // return final to depot
-    return total_cost + vehicle_count * 1000; // penalize more vehicles
-}
-
-vector<int> generate_initial_solution() {
-    vector<int> order;
-    for (int i = 1; i < customers.size(); ++i) order.push_back(i);
-    shuffle(order.begin(), order.end(), rng);
-    return order;
-}
-
-void load_customers(const string &filename) {
-    ifstream in(filename);
+// Read instance
+template<typename T> T getLineToken(istringstream &iss) { T val; iss >> val; return val; }
+void read_instance(const string &f) {
+    ifstream in(f);
+    if (!in) throw runtime_error("Cannot open file");
     string line;
-    int n;
-
     while (getline(in, line)) {
-        if (line.find("NUMBER") != string::npos) break;
+        if (line.rfind("VEHICLE", 0) == 0) {
+            getline(in, line);
+            getline(in, line);
+            istringstream iss(line);
+            iss >> M >> Q;
+            break;
+        }
     }
-
-    in >> n;
+    while (getline(in, line) && line.find("CUSTOMER") == string::npos);
+    getline(in, line);
+    getline(in, line);
+    customers.clear();
     while (getline(in, line)) {
-        if (line.find("CUST") != string::npos) break;
-    }
-
-    int id;
-    while (in >> id) {
+        if (line.empty()) continue;
+        istringstream iss(line);
         Customer c;
-        c.id = id;
-        in >> c.x >> c.y >> c.demand >> c.ready_time >> c.due_date >> c.service_time;
+        c.id = getLineToken<int>(iss);
+        c.x = getLineToken<double>(iss);
+        c.y = getLineToken<double>(iss);
+        c.demand = getLineToken<double>(iss);
+        c.earliest = getLineToken<double>(iss);
+        c.latest = getLineToken<double>(iss);
+        c.service_time = getLineToken<double>(iss);
         customers.push_back(c);
     }
-
-    cout << "Loaded " << customers.size() << " customers\n";
 }
 
-void PSO(int max_evals) {
-    max_evaluations = max_evals;
-    vector<Particle> swarm(swarm_size);
-
-    for (auto &p : swarm) {
-        p.position = generate_initial_solution();
-        p.fitness = evaluate(p.position);
-        p.best_position = p.position;
-        p.best_fitness = p.fitness;
-    }
-
-    vector<int> global_best;
-    double global_best_cost = 1e9;
-
-    for (auto &p : swarm) {
-        if (p.fitness < global_best_cost) {
-            global_best_cost = p.fitness;
-            global_best = p.position;
+// Build distance/time matrices
+void build_matrices() {
+    int n = customers.size();
+    dist.assign(n, vector<double>(n));
+    travel_time = dist;
+    for (int i = 0; i < n; ++i) {
+        for (int j = 0; j < n; ++j) {
+            double d = hypot(customers[i].x - customers[j].x,
+                             customers[i].y - customers[j].y);
+            dist[i][j] = travel_time[i][j] = d;
         }
     }
+}
 
-    uniform_real_distribution<double> prob(0.0, 1.0);
+struct Insertion { int cust, route, pos; double cost1, cost2, regret; };
 
-    for (int iter = 0; iter < max_iter && evaluation_count < max_evaluations; ++iter) {
+// Compute feasible insertion cost; best and second-best, fully simulating time-windows
+bool feasible_insertion(const vector<int>& route, int cust, int& bestPos, double& bestCost, double& secondCost) {
+    bestCost = secondCost = 1e18;
+    bestPos = -1;
+    int rsize = route.size();
+    // try each insertion position
+    for (int pos = 1; pos < rsize; ++pos) {
+        // build temp route with insertion
+        vector<int> tmp = route;
+        tmp.insert(tmp.begin() + pos, cust);
+        double time = 0.0;
+        bool ok = true;
+        // simulate along tmp
+        for (int i = 1; i < tmp.size(); ++i) {
+            int u = tmp[i-1], v = tmp[i];
+            double travel = travel_time[u][v];
+            double service = (i==1 ? 0.0 : customers[u].service_time);
+            time = max(time + service + travel,
+                       static_cast<double>(customers[v].earliest));
+            if (time > customers[v].latest) { ok = false; break; }
+        }
+        if (!ok) continue;
+        // compute extra cost as cost of inserting cust between route[pos-1] and route[pos]
+        int u = route[pos-1], v = route[pos];
+        double base = travel_time[u][v];
+        double extra = travel_time[u][cust] + travel_time[cust][v] - base;
+        // record best and second-best
+        if (extra < bestCost) { secondCost = bestCost; bestCost = extra; bestPos = pos; }
+        else if (extra < secondCost) { secondCost = extra; }
+    }
+    return bestPos >= 0;
+}
+// Regret-2 insertion decoder
+vector<Route> decode(const Sequence &seq) {
+    int nCust = customers.size();
+    vector<bool> used(nCust, false);
+    used[DEPOT] = true;
+    vector<Route> routes;
+
+    // route building
+    while (true) {
+        Route R;
+        R.customers = {DEPOT, DEPOT};
+        R.total_demand = 0;
+        // insert until no more
+        while (true) {
+            vector<Insertion> cand;
+            for (int j : seq) {
+                if (used[j]) continue;
+                if (R.total_demand + customers[j].demand > Q) continue;
+                int pos;
+                double c1, c2;
+                if (!feasible_insertion(R.customers, j, pos, c1, c2)) continue;
+                cand.push_back({j, (int)routes.size(), pos, c1, c2, c2 - c1});
+            }
+            if (cand.empty()) break;
+            // pick highest regret
+            auto it = max_element(cand.begin(), cand.end(), [](auto &a, auto &b){ return a.regret < b.regret; });
+            // perform insertion
+            R.customers.insert(R.customers.begin() + it->pos, it->cust);
+            R.total_demand += customers[it->cust].demand;
+            used[it->cust] = true;
+        }
+        // if only depot inserted -> done
+        if (R.customers.size() <= 2) break;
+        routes.push_back(R);
+        // all assigned?
+        if (all_of(used.begin(), used.end(), [](bool u){ return u; })) break;
+    }
+    return routes;
+}
+
+// PSO velocity as swap operations
+struct SwapOp { int i, j; };
+vector<SwapOp> diff(const Sequence &a, const Sequence &b) {
+    Sequence t = a;
+    vector<SwapOp> ops;
+    for (int i = 0; i < t.size(); ++i) {
+        if (t[i] != b[i]) {
+            int j = find(t.begin() + i + 1, t.end(), b[i]) - t.begin();
+            ops.push_back({i, j});
+            swap(t[i], t[j]);
+        }
+    }
+    return ops;
+}
+void apply_swaps(Sequence &s, const vector<SwapOp> &ops) {
+    for (auto &o : ops) swap(s[o.i], s[o.j]);
+}
+
+SolutionScore evaluate(const Sequence &seq, int iter, int maxIt) {
+    auto routes = decode(seq);
+    double distSum = 0;
+    for (auto &r : routes) {
+        for (int k = 1; k < r.customers.size(); ++k)
+            distSum += travel_time[r.customers[k-1]][r.customers[k]];
+    }
+    int v = routes.size();
+    double pen = 1e4 * v + distSum;
+    return {v, distSum, pen};
+}
+
+int main(int argc, char *argv[]) {
+    if (argc < 4) { cerr << "Usage: " << argv[0] << " <in> <time> <particles>\n"; return 1; }
+    string in = argv[1]; int T = stoi(argv[2]); int P = stoi(argv[3]); if (P < 1) P = 30;
+    read_instance(in);
+    build_matrices();
+    int n = customers.size();
+    Sequence base(n-1);
+    iota(base.begin(), base.end(), 1);
+
+    mt19937 rng((unsigned)Clock::now().time_since_epoch().count());
+    auto uni = [&](double p){ return uniform_real_distribution<>(0,1)(rng) < p; };
+    struct Particle { Sequence s, pb; SolutionScore ps; vector<SwapOp> v; };
+    vector<Particle> swarm(P);
+    Particle gbest; gbest.ps = {INT_MAX, 1e18, 1e18};
+
+    // init
+    for (int i = 0; i < P; ++i) {
+        swarm[i].s = base;
+        shuffle(swarm[i].s.begin(), swarm[i].s.end(), rng);
+        swarm[i].pb = swarm[i].s;
+        swarm[i].ps = evaluate(swarm[i].s, 0, T);
+        if (swarm[i].ps.penalized < gbest.ps.penalized) gbest = swarm[i];
+    }
+    auto start = Clock::now(); int iter = 0;
+    // main loop
+    while (chrono::duration_cast<chrono::seconds>(Clock::now() - start).count() < T) {
+        ++iter;
+        double w = 0.9 - 0.5 * (double)iter / T;
         for (auto &p : swarm) {
-            vector<int> new_pos = p.position;
-
-            if (prob(rng) < 0.5) {
-                // Apply crossover with global best (discrete recombination)
-                int i = rand() % new_pos.size();
-                int j = rand() % new_pos.size();
-                if (i > j) swap(i, j);
-                vector<int> segment(global_best.begin() + i, global_best.begin() + j);
-                vector<int> new_route;
-                for (int k = 0; k < new_pos.size(); ++k) {
-                    if (find(segment.begin(), segment.end(), new_pos[k]) == segment.end())
-                        new_route.push_back(new_pos[k]);
-                }
-                new_route.insert(new_route.begin() + i, segment.begin(), segment.end());
-                new_pos = new_route;
-            }
-
-            if (prob(rng) < 0.3) {
-                // Mutation (swap)
-                int i = rand() % new_pos.size();
-                int j = rand() % new_pos.size();
-                swap(new_pos[i], new_pos[j]);
-            }
-
-            double cost = evaluate(new_pos);
-            if (cost < p.best_fitness) {
-                p.best_fitness = cost;
-                p.best_position = new_pos;
-            }
-            if (cost < global_best_cost) {
-                global_best_cost = cost;
-                global_best = new_pos;
-            }
-            p.position = new_pos;
+            vector<SwapOp> nv;
+            for (auto &op : p.v) if (uni(w)) nv.push_back(op);
+            for (auto &op : diff(p.s, p.pb)) if (uni(1.2)) nv.push_back(op);
+            for (auto &op : diff(p.s, gbest.pb)) if (uni(1.2)) nv.push_back(op);
+            p.v = std::move(nv);
+            apply_swaps(p.s, p.v);
+            auto sc = evaluate(p.s, iter, T);
+            if (sc.penalized < p.ps.penalized) { p.ps = sc; p.pb = p.s; }
+            if (sc.penalized < gbest.ps.penalized) gbest = p;
         }
-
-        cout << "Iteration " << iter << ", Best Cost: " << global_best_cost << endl;
     }
+    auto bestRoutes = decode(gbest.pb);
+    int V = gbest.ps.vehicles;
+    double D = gbest.ps.distance;
 
-    // Output
-    ofstream out("pso_output.txt");
-    out << "Best cost: " << global_best_cost << "\nRoute:\n";
-    for (int id : global_best) out << id << " ";
-    out << endl;
-}
-
-int main(int argc, char* argv[]) {
-    if (argc < 4) {
-        cerr << "Usage: ./vrptw_pso <input_file> <vehicle_capacity> <max_evaluations>\n";
-        return 1;
+    ofstream o(in.substr(0,in.find_last_of('.'))+"_pso.txt");
+    for (int i = 0; i < bestRoutes.size(); ++i) {
+        o << "Route " << i+1 << ": ";
+        for (int j = 1; j + 1 < bestRoutes[i].customers.size(); ++j) o << bestRoutes[i].customers[j] << " ";
+        o << "(d=" << bestRoutes[i].total_demand << ")\n";
     }
-
-    string filename = argv[1];
-    vehicle_capacity = stoi(argv[2]);
-    max_evaluations = stoi(argv[3]);
-
-    load_customers(filename);
-    compute_distance_matrix();
-
-    auto start = high_resolution_clock::now();
-    PSO(max_evaluations);
-    auto end = high_resolution_clock::now();
-    cout << "Execution time: " << duration_cast<seconds>(end - start).count() << "s\n";
-
+    o << "Vehicles:" << V << "\nDistance:" << D << "\n";
+    cout << "PSO Best Vehicles=" << V << " Distance=" << D << "\n";
+    cout << validate_solution(bestRoutes);
     return 0;
 }
