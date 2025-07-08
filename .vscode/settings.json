@@ -67,6 +67,16 @@
         "__hash_table": "cpp",
         "deque": "cpp",
         "unordered_set": "cpp",
-        "forward_list": "cpp"
+        "forward_list": "cpp",
+        "__node_handle": "cpp",
+        "stack": "cpp",
+        "chrono": "cpp",
+        "codecvt": "cpp",
+        "complex": "cpp",
+        "iomanip": "cpp",
+        "sstream": "cpp",
+        "stop_token": "cpp",
+        "text_encoding": "cpp",
+        "cinttypes": "cpp"
     }
 }
