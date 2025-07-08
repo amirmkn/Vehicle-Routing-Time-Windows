@@ -496,6 +496,7 @@ int main(int argc, char *argv[]) {
         swarm[i].ps = evaluate(swarm[i].s, 0);
         if (swarm[i].ps.penalized < gbest.ps.penalized) gbest = swarm[i];
     }
+    gbest.decoded_routes = USE_FULL_REGRET2 ? decode_full_regret2(gbest.pb) : decode_klimited_regret2(gbest.pb, false);
     long long evalCount = 0;
     auto start = Clock::now(); 
     int iter = 0;
